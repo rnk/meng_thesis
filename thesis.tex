@@ -1,0 +1,272 @@
+%% Available options for the mengthesis documentclass:
+
+%% Option `11pt':
+%%   Use an 11pt font (10pt by default).
+
+%% Option `12pt':
+%%   Use an 12pt font (10pt by default).
+
+%% Option `draft':
+%%   Puts `overfull' boxes at the end of lines that are too long.
+
+%% Option `leftblank':
+%%   If using the `twoside' option, marks extra blank pages with ``THIS PAGE
+%%   INTENTIONALLY LEFT BLANK''.
+
+%% Option `mitcopyright':
+%%   Gives the thesis copyright to MIT instead of the author.
+
+%% Option `singlespace':
+%%   Single-spaces the document, for drafts (double-spaced by default).
+
+%% Option `twoside':
+%%   Prints double-sided, inserting extra blank pages as necessary.
+
+\documentclass[twoside,leftblank,mitcopyright]{mengthesis}
+
+% Very basic packages you'll likely need for graphics, symbols, PDF hyperlinking, etc
+\usepackage{xcolor, graphicx, gensymb, amssymb, amsmath, textcomp, hyperref}
+
+% Helps manage floats and prevent them from going into the next section
+% ex: use \FloatBarrier to prevent any floats from going that point in the doc 
+\usepackage{placeins}
+
+% Tables with more column flexibility
+\usepackage{tabularx}
+
+% Customize formatting of captions
+\usepackage[hang, small, bf, margin=20pt, tableposition=top]{caption}
+
+% Better done ToCs
+\usepackage{tocloft}
+
+% Allows areas of text to be excluded from processing, ex: \begin{xcomment} blah \end{xcomment}
+\usepackage{xcomment}
+
+% Creates ordinal number suffixes/formatting like 1st, 2nd, etc. ex: \engordnumber{2} 
+\usepackage{engord}
+% command for "0th"
+\newcommand{\zeroth}{0$^{\rm th}$}
+
+
+% Define centered expanding width column
+\newcolumntype{C}{>{\centering\arraybackslash}X}
+
+% Used for subfigures
+\usepackage{subfig}
+\captionsetup[subfigure]{format=hang, margin=5pt}
+
+% Use EPS files in PDFLatex
+\usepackage{epstopdf}
+
+% Define colors for the todo list
+%\usepackage{atveryend} % prereq for todonotes
+% Get \marginpar to work properly on odd/even pages
+%\usepackage{mparhack}
+%\setlength{\marginparwidth}{2cm} % hack to get todonotes to play with MEng template
+%\definecolor{todonotesbg}{rgb}{1, 0.678431373, 0.631372549}
+%\usepackage[colorinlistoftodos, color=todonotesbg,bordercolor=red,textsize=footnotesize]{todonotes}
+%\newcommand{\todo}{}  %If you need to disable todo temporarily
+
+% Prettifies Tables - ex: \toprule, \bottomrule, \midrule
+\usepackage{booktabs}
+
+% Easily use acronyms - ex: \acronym{SN}{supernova}, \ac{SN},  
+\usepackage[printonlyused,withpage]{acronym}
+
+% Allow rotated tables, figures, etc
+\usepackage{rotating}
+
+% Side captions, ex: \begin{SCfigure}
+\usepackage{sidecap}
+
+% Embed PDF pages in document, ex: \includepdf[pages=1-4]{Myfile.pdf}
+\usepackage{pdfpages}
+
+% Setup the Hypertext PDF linking
+\hypersetup{
+    bookmarks=true,         % show bookmarks bar?
+    unicode=false,          % non-Latin characters in Acrobat’s bookmarks
+    pdftoolbar=true,        % show Acrobat’s toolbar?
+    pdfmenubar=true,        % show Acrobat’s menu?
+    pdffitwindow=false,     % window fit to page when opened
+    pdfstartview={FitH},    % fits the width of the page to the window
+    pdftitle=My Spiffy Thesis,    % title
+    pdfauthor=My Awesome Name,     % author
+%   pdfsubject={Subject},   % subject of the document
+%    pdfcreator={Creator},   % creator of the document
+%    pdfproducer={Producer}, % producer of the document
+%    pdfkeywords={keywords}, % list of keywords
+    pdfnewwindow=true,      % links in new window
+    colorlinks=true,       % false: boxed links; true: colored links
+    linkcolor=black,          % color of internal links
+    citecolor=blue,        % color of links to bibliography
+    filecolor=magenta,      % color of file links
+    urlcolor=cyan           % color of external links
+}
+
+% Compacted itemize- less white space inbetween items
+\usepackage{enumitem}  % compact enumerates and itemizes, ex: \begin{enumerate*}...
+\newenvironment{packed_itemize}{
+\begin{itemize}[label=\textbullet, nolistsep, leftmargin=10pt,
+            before*={\mbox{}\vspace{-\baselineskip}}]
+  \setlength{\itemsep}{2pt}
+  \setlength{\parskip}{0pt}
+  \setlength{\topsep}{0pt}
+  \setlength{\partopsep}{0pt}
+  \setlength{\parsep}{0pt}
+}{\end{itemize}}
+\newenvironment{subpacked_itemize}{
+\begin{itemize}[label=\textbullet, nolistsep, leftmargin=10pt]
+  \setlength{\itemsep}{2pt}
+  \setlength{\parskip}{0pt}
+  \setlength{\topsep}{0pt}
+  \setlength{\partopsep}{0pt}
+  \setlength{\parsep}{0pt}
+}{\end{itemize}}
+
+% Remove citations from ToC, ToF, etc..., Ex: none, works automatically
+\usepackage{notoccite}
+
+% Force LaTex to not change spacing between paragraphs
+\setlength{\parskip}{8pt}
+
+% For floats, Ex: \float[H]...
+\usepackage{float}
+
+% For floating figures with text wrap. Ex: \begin{wrapfigure}{r}{0.5\textwidth}
+\usepackage{wrapfig}
+
+% Force compacted white space between chapter and section titles
+\usepackage[compact,rigidchapters]{titlesec}
+
+\begin{document}
+
+%=============================== CONFIGURATION ===============================%
+
+%% Specify your thesis title.
+
+\title{My Spiffy Thesis}
+
+%% Specify your full name.
+
+\author{My Awesome Name}
+
+%% If you wish to list your previous degrees on the cover page, use the
+%% previous degrees command:
+%%       \prevdegrees{A.A., Harvard University (1985)}
+%% You can use the \\ command to list multiple previous degrees
+%%       \prevdegrees{B.S., University of California (1978) \\
+%%                    S.M., Massachusetts Institute of Technology (1981)}
+
+\prevdegrees{S.B., Massachusetts Institute of Technology (2006)}
+
+%% Specify the month and year you'll be graduating, and the exact date to put
+%% on the thesis.
+\degreemonth{February}
+\degreeyear{2010}
+\thesisdate{February 10, 2010}
+
+%% By default, the thesis will be copyrighted to you.  If you need to copyright
+%% the thesis to MIT, just specify the `mitcopyright' documentclass option.  If
+%% for some reason you want to exactly specify the copyright notice text, you
+%% can use the \copyrightnotice command.
+
+%\copyrightnotice{Copyleft 2009 John E. Doe.  All rights reversed.}
+
+%% Use the \supervisor command to specify the name and title of your thesis
+%% supervisor.  If there is more than one supervisor, use the \supervisor
+%% and/or \cosupervisor command once for each.
+
+% For your advisor's proper title: http://eecsfacweb.mit.edu/gallery.html
+\supervisor{My Advisor's Name}
+           {My Advisor's Title}
+
+
+%============================= DOCUMENT PREAMBLE =============================%
+
+%% Create a title page, as specified by the Course-VI M.Eng. Thesis Guide.
+\pdfbookmark[0]{Title Page}{title} % Sets a PDF bookmark for the title page
+\maketitle
+
+%% Acknowledgements
+
+%% Create the TOC; feel free to add lists of figures/tables after this.
+
+%% Begin "Page Left Blank" hack for forcing ToC/LoF/etc to start on odd numbered page- you may need to remove this!
+\clearpage
+\hbox{}\par\vfill\centerline%
+   {THIS PAGE INTENTIONALLY LEFT BLANK}%
+   \vfill\newpage
+   \thispagestyle{plain}
+\clearpage
+%% End "Page Left Blank" hack
+
+\pdfbookmark[0]{Contents}{contents} % Sets a PDF bookmark for the contents page
+\tableofcontents
+
+%% Begin "Page Left Blank" hack for forcing ToC/LoF/etc to start on odd numbered page- you may need to remove this!
+\clearpage
+\hbox{}\par\vfill\centerline%
+   {THIS PAGE INTENTIONALLY LEFT BLANK}%
+   \vfill\newpage
+   \thispagestyle{plain}
+\clearpage
+%% End "Page Left Blank" hack
+
+%% Create the List of Figures
+\listoffigures
+
+%% Create the List of Tables
+\clearpage % You may need to remove this!
+\listoftables
+
+%% Begin "Page Left Blank" hack for forcing ToC/LoF/etc to start on odd numbered page- you may need to remove this!
+\clearpage
+\hbox{}\par\vfill\centerline%
+   {THIS PAGE INTENTIONALLY LEFT BLANK}%
+   \vfill\newpage
+   \thispagestyle{plain}
+\clearpage
+%% End "Page Left Blank" hack
+
+%================================= CHAPTERS ==================================%
+\input{abstract}
+\input{acknowledgements}
+
+%% Nomenclature- for acronyms
+\input{nomenclature}
+\acresetall % Reset the acronym definitions
+
+\input{introduction}
+
+\input{background}
+
+\input{design}
+
+\input{usability}
+
+\input{results}
+
+\input{conclusions}
+
+%================================= APPENDIX ==================================%
+
+\input{appendix}
+
+%=============================== BIBLIOGRAPHY ================================%
+
+% Force the PDF bookmarks to include the References
+\clearpage
+\phantomsection 
+
+\renewcommand{\bibname}{References}  % Rename the bibliography to referances
+
+\begin{singlespace}
+\bibliographystyle{ieeetr} % Use the IEEE style- citations are numbered in order of appearance in the doc
+\addcontentsline{toc}{chapter}{References} % Add to the table of contents
+\bibliography{thesis}
+\end{singlespace}
+
+%=============================================================================%
+\end{document}
