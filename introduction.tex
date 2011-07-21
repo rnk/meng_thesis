@@ -1,0 +1,27 @@
+\chapter{Introduction}
+
+Dynamic program analysis tools built with dynamic binary instrumentation have
+proven indispensable for developing complex native applications.  Memory safety
+tools like Valgrind\cite{TODO} have spotted innumerable Heisenbugs.  Race
+detectors such as FastTrack\cite{TODO}, Eraser\cite{TODO}, Helgrind\cite{TODO},
+and Thread Sanitizer\cite{TODO} have made programming with shared memory
+feasible.  Cache simulators and branch prediction simulators such as
+Cachegrind\cite{TODO} provide a way to optimize cache usage in a given program.
+
+These are just the most commonly used types of instrumentation tools.  However,
+researchers in academia and industry frequently build new general-purpose as
+well as application-specific tools.  For example, a research group at MIT
+recently created a tool for detecting and escaping from infinite loops with
+Pin.\cite{TODO}  During the work for this thesis, I developed a tool for
+to identify which routines in an application perform unaligned memory accesses,
+which can hurt performance.
+
+For the last several years, Pin has been the framework of choice for
+implementing new custom program analysis tools.  Pin's success in this area is
+explained in the creators' PLDI paper, which focuses on Pin's facilities for
+abstracting away architectural details from the instrumentation tool.  Most
+importantly, Pin tools are expected to create instrumentation using callbacks
+into C.  Pin supports inlining simple instrumentation functions, but most
+non-leaf callbacks do not meet this criteria.
+
+EXAMPLE CITATION.  \cite{bruening_phd}

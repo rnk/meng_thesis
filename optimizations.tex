@@ -1,0 +1,186 @@
+\chapter{Optimization}
+
+The callee optimization process is a pipeline of repeatedly simplifying the
+callee instruction stream to enable further optimizations, just as in a
+traditional static compiler.  The process starts with the decoding, which is
+complicated by the potential lack of debug information.  The decoded
+instruction stream must then be examined to remove calling convention artifacts
+that use the stack, since we may not use the stack if we wish to inline.  We
+also need to remove artifacts like the call+pop PIC sequences on x86\_32, which
+will not work when inlined.  Ideally, we will then have a code sequence that
+uses very little stack space and uses a small number of registers.
+Unfortunately, traditional compilers freely use additional caller-saved
+registers instead of reusing dead registers.  To avoid saving all of these
+extra registers, we perform a series of machine code optimizations to reduce
+register pressure.
+
+If there is control flow in the code stream, we check if either the taken or
+untaken branch paths can be easily inlined.  If one side of the branch can be
+easily inlined, we assume that this is the common case.  While this may not be
+true for all tools, our experience shows that it is true for most kinds of
+instrumentation.  If we have a fastpath, we inline the code from the entry to
+the check and the fastpath.  In the slowpath we emit a jump to a shared, out of
+line clean call to the beginning of the tool's callback.
+
+If the final instruction stream meets our criteria for inlining, we cache the
+optimized instruction stream and splice a copy of it into the application code
+stream.
+
+\section{Decoding}
+
+When a tool inserts a clean call, all it provides is a list of machine operand
+arguments and a function pointer to call.  Given a function pointer, it is
+challenging to reliably decode the function itself and determine where it ends.
+
+The na\"ive approach of scanning forward from the function entry to the first
+{\em ret} instruction breaks down quickly.  GCC, for example, when compiling a
+simple if/else construct, will perform a tail merging optimization.  In this
+case, the condition will be checked, and if it fails, control will jump past the
+epilogue to execute the else clause.  After the else, it has a backwards branch
+to the epilogue.
+
+On the other hand, following all control flow is not generally possible, because
+it breaks down in the presence of intra-instruction branches and indirect
+branches.  Our decoding algorithm is simply to remember the furthest forward
+branch target, and to decode up until at least that address.  Once we've passed
+that address, we continue decoding until we reach a {\em ret}, a backwards
+branch, or a probable tail call.  Our heuristic for identifying tail calls is
+simply to check if the target address is not between the entry address and the
+entry plus 4096.
+
+After decoding, we pass over the stream to point all of the decoded branches at
+labels in the instruction stream instead of the original tool PC values.  This
+allows us to follow a branch to a later point in the stream during optimization.
+
+\section{Prologue and Epilogue}
+
+Depending on operating system, ISA, and compiler, the instruction stream may
+have a handful of prologue and epilogue instructions for setting up a stack
+frame.  These instructions inhibit further analysis because they access stack
+memory and change the stack pointer.  Our approach is to analyze them, extract
+the information about the callee that they hold, and remove them from the
+instruction stream.  If later we decide to inline, we use this information to
+set up a stack frame ourselves.
+
+One of the major complications of this analysis is that there are potentially
+multiple exit points from the callee.  For example, an alignment checking tool
+that we want to optimize might have code like the following:
+
+\begin{verbatim}
+% TODO: pretty this up.
+void check_access(uintptr_t ea, unsigned size) {
+  if ((ea & (size - 1)) == 0) {
+    return;
+  }
+  dr_printf("unaligned access to ea %p of size %u!\n", ea, size);
+}
+\end{verbatim}
+
+The compiler may optimize the sample code to use two exit points: one for the
+return statement, and another to set up a tail call to {\tt dr\_printf}.
+
+For the prologue analysis, we effectively want to match up the instructions that
+do and undo the same things.  For example, in setup, if we push the base
+pointer, we want to make sure we pop it in all epilogues.  If we copy the stack
+pointer into the base pointer, then we want to find where that is undone in the
+epilogues.
+
+Further complicating the analysis are the different ways of setting up the
+frame.  For example, different compilers may use enter, or a combination of
+pushes, movs, and subtractions to set up a frame.  To leave a frame, it may use
+the {\tt leave} instruction or a combination of movs and pops.  Our algorithm
+abstracts this away.
+
+We also look for saves of callee saved registers.  Most often compilers will
+generate matched pushes and pops to save these registers, most likely because
+those instructions are small to encode.  On the other hand, GCC on Linux x86\_64
+seems to prefer movs to save, which we do not handle yet.
+
+Even further complicating our analysis is the compiler's instruction scheduler.
+During the prologue, the compiler is setting up the frame and saving
+caller saved registers that it wants to use.  However, register-to-register
+instructions may be rescheduled into the prologue because they do not interfere
+with the rest of the prologue.  While this is desirable for normal compiled
+code because it improves instruction level parallelsim, it complicates our
+analysis.  Our solution is to ignore such register to register movs while
+matching the prologue and epilogue, so long as they don't clobber any registers
+that have yet to be saved.
+
+% That bit about clobbering is not implemented.
+
+\begin{verbatim}
+TODO: Provide code sample of prologue setup with scheduling.
+\end{verbatim}
+
+\section{Inlining}
+
+%The design considerations for the inliner are guided mainly by the transparency
+%restrictions we must maintain.  Our main concerns are:
+
+%\begin{itemize}
+%\item We may not clobber application registers.
+%\item We may not touch the application stack.  The application may be using
+%memory past the end of the stack, such as with the Linux x86\_64 red zone, or
+%it may be a guard page.
+%\item When inlining, the PC of the instruction will be from the code cache, not
+%the original tool code.
+%\end{itemize}
+
+%Therefore, we start by switching to a clean stack.
+
+% Procedure:
+% - Materialize args
+% - Re-optimize to fold args into callee
+% - Re-analyze register usage
+% - Switch dstack
+% - Save used regs
+% - Insert code, clear translation pc, assume no faults
+% - Restore used regs
+% - Switch to appstack
+
+When we decide to inline a function, we emit the following code at the call
+site:
+
+\begin{enumerate}
+\item Switch to a clean stack.
+\item Save clobbered registers.
+\item Save the flags register if used.
+\item Materialize arguments into parameter registers.
+\item Emit the simplified inline code stream.
+\item Restore the flags register if used.
+\item Restore clobbered registers.
+\item Switch back to the application stack.
+\end{enumerate}
+
+We also have an optional optimization that can avoid stack switching in some
+cases, but allocates additional TLS space.  TLS space is limited, particularly
+on Windows, where it is shared with the application due to the {\tt GS} segment
+base being reset to zero on every context switch.
+
+% TODO: This is a poor description, maybe should have own section, rewrite.
+
+\subsection{Switch to Application Stack}
+
+To switch stacks, we first save the application stack value into a reserved TLS
+scratch slot.  Another TLS scratch slot is used to locate the thread-local {\tt
+dcontext} structure, which contains a pointer to the base of a clean stack, or
+{\tt dstack}.  This procedure gives us the following code sequence on x86\_64:
+
+\begin{verbatim}
+mov    %rsp             -> %gs:0x00   # Save application stack pointer.
+mov    %gs:0x20         -> %rsp       # Load dcontext pointer.
+mov    0x000002c0(%rsp) -> %rsp       # Load dstack pointer.
+\end{verbatim}
+
+\subsection{Register Saving}
+
+Once we have switched stacks, we allocate space for an {\tt mcontext} structure
+within which to save registers.  We use this structure layout in order to
+maintain compatibility with tools with partially inlined routines that call
+{\tt dr\_get\_mcontext}, which will give the tool access to this structure.
+
+\section{Partial inlining}
+
+\section{Coalescing}
+
+\section{RLE \& DSE}

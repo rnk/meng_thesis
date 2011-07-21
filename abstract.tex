@@ -4,5 +4,44 @@
 %% usual "abstract" environment.
 \begin{abstractpage}
 \pdfbookmark[0]{Abstract}{abstract} % Sets a PDF bookmark for the abstract
-Ironically, this section should be concrete
+
+The proliferation of dynamic program analysis tools has done much to ease the
+burden of developing complex software.  However, creating such tools remains a
+challenge.  Dynamic binary instrumentation frameworks such as DyanamoRIO and
+Pin provide support for such tools by taking responsibility for application
+transparency and machine code manipulation.  However, tool writers must still
+make a tough choice when writing instrumentation: should they inject custom
+inline assembly into the application code, or should they use the framework
+facilities for inserting callbacks into regular C code?  Custom assembly can be
+more performant and more flexible, but it forces the tool to take some
+responsibility for maintaining application transparency.  Callbacks into C, or
+``clean calls,'' allow the tool writer to ignore the details of maintaining
+transparency.  Generally speaking, a clean call entails switching to a safe
+stack, saving all registers, materializing the arguments, and jumping to the
+callback.
+
+% Too much exposition above.
+
+This thesis presents a suite of optimizations for DynamoRIO that improve the
+performance of ``na\"ive tools,'' or tools which rely primarily on clean calls
+for instrumentation.  The contributions include:
+
+\begin{itemize}
+\item Inlining simple, leaf callbacks into the application code stream.
+\item Partial inlining of callbacks which perform a simple check to decide
+between doing work which can be inlined and work that cannot.
+\item Lean call insertion, which inserts a call with minimal code footprint.
+\item Coalescing inlined calls to prevent unnecessary register saves or stack
+switches.
+%\item Transforming instructions to avoid usage of the x86 flags register.
+\item Using fewer registers to eliminate extra saves and restores.
+\item Classic optimizations such as dead store elimination and redundant load
+elimination.
+\end{itemize}
+
+With this additional functionality built on DynamoRIO, we have shown
+improvements of up to 54.8x for a na\"ive instruction counting tool as well as
+a XXX\% performance improvement for a memory alignment checking tool on the
+bzip2 benchmark from the SPEC 2006 CPU benchmark suite.
+
 \end{abstractpage}

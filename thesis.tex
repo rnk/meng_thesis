@@ -40,8 +40,8 @@
 % Better done ToCs
 \usepackage{tocloft}
 
-% Allows areas of text to be excluded from processing, ex: \begin{xcomment} blah \end{xcomment}
-\usepackage{xcomment}
+%% Allows areas of text to be excluded from processing, ex: \begin{xcomment} blah \end{xcomment}
+%\usepackage{xcomment}
 
 % Creates ordinal number suffixes/formatting like 1st, 2nd, etc. ex: \engordnumber{2} 
 \usepackage{engord}
@@ -146,11 +146,11 @@
 
 %% Specify your thesis title.
 
-\title{My Spiffy Thesis}
+\title{Optimization of Na\"{i}ve Dynamic Binary Instrumentation Tools}
 
 %% Specify your full name.
 
-\author{My Awesome Name}
+\author{Reid Kleckner}
 
 %% If you wish to list your previous degrees on the cover page, use the
 %% previous degrees command:
@@ -159,13 +159,13 @@
 %%       \prevdegrees{B.S., University of California (1978) \\
 %%                    S.M., Massachusetts Institute of Technology (1981)}
 
-\prevdegrees{S.B., Massachusetts Institute of Technology (2006)}
+\prevdegrees{S.B., Massachusetts Institute of Technology (2010)}
 
 %% Specify the month and year you'll be graduating, and the exact date to put
 %% on the thesis.
-\degreemonth{February}
-\degreeyear{2010}
-\thesisdate{February 10, 2010}
+\degreemonth{September}
+\degreeyear{2011}
+\thesisdate{September XXX, 2010}
 
 %% By default, the thesis will be copyrighted to you.  If you need to copyright
 %% the thesis to MIT, just specify the `mitcopyright' documentclass option.  If
@@ -179,8 +179,8 @@
 %% and/or \cosupervisor command once for each.
 
 % For your advisor's proper title: http://eecsfacweb.mit.edu/gallery.html
-\supervisor{My Advisor's Name}
-           {My Advisor's Title}
+\supervisor{Saman Amarasinghe}
+           {Professor of Computer Science}
 
 
 %============================= DOCUMENT PREAMBLE =============================%
@@ -195,11 +195,11 @@
 
 %% Begin "Page Left Blank" hack for forcing ToC/LoF/etc to start on odd numbered page- you may need to remove this!
 \clearpage
-\hbox{}\par\vfill\centerline%
-   {THIS PAGE INTENTIONALLY LEFT BLANK}%
-   \vfill\newpage
-   \thispagestyle{plain}
-\clearpage
+%\hbox{}\par\vfill\centerline%
+   %{THIS PAGE INTENTIONALLY LEFT BLANK}%
+   %\vfill\newpage
+   %\thispagestyle{plain}
+%\clearpage
 %% End "Page Left Blank" hack
 
 \pdfbookmark[0]{Contents}{contents} % Sets a PDF bookmark for the contents page
@@ -207,11 +207,11 @@
 
 %% Begin "Page Left Blank" hack for forcing ToC/LoF/etc to start on odd numbered page- you may need to remove this!
 \clearpage
-\hbox{}\par\vfill\centerline%
-   {THIS PAGE INTENTIONALLY LEFT BLANK}%
-   \vfill\newpage
-   \thispagestyle{plain}
-\clearpage
+%\hbox{}\par\vfill\centerline%
+   %{THIS PAGE INTENTIONALLY LEFT BLANK}%
+   %\vfill\newpage
+   %\thispagestyle{plain}
+%\clearpage
 %% End "Page Left Blank" hack
 
 %% Create the List of Figures
@@ -223,42 +223,41 @@
 
 %% Begin "Page Left Blank" hack for forcing ToC/LoF/etc to start on odd numbered page- you may need to remove this!
 \clearpage
-\hbox{}\par\vfill\centerline%
-   {THIS PAGE INTENTIONALLY LEFT BLANK}%
-   \vfill\newpage
-   \thispagestyle{plain}
-\clearpage
+%\hbox{}\par\vfill\centerline%
+   %{THIS PAGE INTENTIONALLY LEFT BLANK}%
+   %\vfill\newpage
+   %\thispagestyle{plain}
+%\clearpage
 %% End "Page Left Blank" hack
 
 %================================= CHAPTERS ==================================%
 \input{abstract}
+
 \input{acknowledgements}
 
-%% Nomenclature- for acronyms
-\input{nomenclature}
-\acresetall % Reset the acronym definitions
+%%% Nomenclature- for acronyms
+%\input{nomenclature}
+%\acresetall % Reset the acronym definitions
 
 \input{introduction}
 
-\input{background}
+\input{dynamorio}
 
-\input{design}
+\input{optimizations}
 
-\input{usability}
+\input{performance}
 
-\input{results}
-
-\input{conclusions}
+\input{contributions}
 
 %================================= APPENDIX ==================================%
 
-\input{appendix}
+%\input{appendix}
 
 %=============================== BIBLIOGRAPHY ================================%
 
 % Force the PDF bookmarks to include the References
 \clearpage
-\phantomsection 
+\phantomsection
 
 \renewcommand{\bibname}{References}  % Rename the bibliography to referances
 
