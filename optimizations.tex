@@ -175,6 +175,7 @@ Note the register instructions mixed with frame setup.}
 \end{figure}
 
 \section{Inlining}
+\label{sec:inlining}
 
 The goal of inlining is to execute the instrumentation code from the application
 code fragment in the code cache and avoid the expensive, full context switch to
@@ -394,6 +395,7 @@ lea    0x44(%rdi,%rax,4) -> %rdi        # Compute effective address into rdi.
 \end{figure}
 
 \section{Partial Inlining}
+\label{sec:partial_inlining}
 
 The major contribution of this thesis is the ability to profitably inline
 instrumentation routines that perform conditional program analysis without

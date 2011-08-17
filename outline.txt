@@ -6,15 +6,69 @@ implementation of.  For every instr, insert call to increment array element
 indexed by argument of opcode enum.  Inline, fold lea, bam.  Con: requires
 re-running benchmarks.
 
+- What do I need in background?
+  - What does DR offer a tool writer?
+  - BB-by-BB exec model
+  - App context vs. DR context
+  - Roughly how to switch contexts
+  - Discuss scratch space and OS TLS concerns
+
 Possible outline:
 
-- Introduction.  Tell story of tools, why they are good, examples of what they
-  can do.  Tell story of writing instruction count client.
+- Introduction.
+  - Tell story of tools, why they are good, examples of what they can do.  Tell
+    story of writing instruction count client.
 
-- Background.
-  - Execution model.  Dynamic instrumentation framework has a code cache,
-    interprets basic block by basic block, instruments, and puts in cache.
-  - Transparency.  All framework operations are hidden from application.
-    - Ex: Stack avoidance.
-    - Ex: 
-  - Context switching.
+- Background on DynamoRIO
+  - Benefits for tool writers:
+    - Provides abstract representation of machine instructions as bbs executed,
+      allows tool to insert its own instructions as instrumentation.
+    - Maintains control for tool, even in face of SMC, JITs, execution from
+      stack, complex Windows desktop apps using OS resources, etc.
+    - DR provides transparency, helps hide tool operations from application,
+      Ex must use alternate stack.
+  - Execution model
+    - Two contexts: application context and dynamorio context, separate stacks
+    - Basic block interpretation: appstart, from first instr to next CTI
+    - Terminating CTI is mangled to return control to DR
+    - Modified basic block is encoded into a "fragment" in the "code cache"
+    - DR switches to app context in fragment, fragment switches to DR context
+      when finished.
+    - DR examines app context, determines app's target PC, interprets next basic
+      block.
+    - Finally, basic blocks with direct CTIs are "linked" to eliminate any
+      context switches from code paths executed more than once.
+
+- Inlining
+  - Describe instruction count
+  - Clean calls
+  - Inlined calls
+  - Coalesced calls
+  - Fold immediate args into adds
+  - Remove register save/restore pairs between calls
+  - RLE/DSE
+  - Avoid aflags
+  - Fold leas
+  - Use TLS
+
+- Partial inlining
+  - alignment & memtrace: describe structure of common fast path, alude to
+    similar technique in our fasttrack race detector.
+  - Clean calls: cost of context switch is more than work done in common case
+  - Handling Fastpath: describe detection of and isolation of fastpath
+  - Handling Slowpath: describe expansion of slowpath
+  - Handling Side Effects: describe how side effects are deferred in memtrace
+    example
+  - Alternative: Predicate Function: discuss Pin's approach of InsertIfCall +
+    InsertThenCall, inline IfCall if possible.  Requires client code
+    restructuring, but doesn't suffer from above issues.
+
+- Performance
+  - inscount
+  - alignment
+  - memtrace
+
+- Contributions
+  - Inlining
+  - Partial inlining
+  - x86 instruction optimization suite

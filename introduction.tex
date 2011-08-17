@@ -1,47 +1,87 @@
 \chapter{Introduction}
 
+\section{Research Objectives}
+
 Dynamic program analysis tools built with dynamic binary instrumentation have
-proven indispensable for developing complex native applications.  Memory safety
-tools like Valgrind\cite{valgrind} have spotted innumerable Heisenbugs.  Race
-detectors such as Helgrind\cite{helgrind} and Thread Sanitizer\cite{tsan} have
-made programming with shared memory feasible.  Cache simulators and branch
-prediction simulators such as Cachegrind\cite{valgrind_workloads} provide a way
-to optimize cache usage in a given program.
+proven indispensable for developing largs applications in C and C++.
+Valgrind's\cite{valgrind} memory debugger in particular has been instrumental in
+tracking down uses of uninitialized memory and memory leaks.  Race detectors
+such as Helgrind\cite{helgrind} and Thread Sanitizer\cite{tsan} have made
+programming with shared memory feasible.  Cache simulators and branch prediction
+simulators such as Cachegrind\cite{valgrind_workloads} provide a way to optimize
+cache usage in a given program.
 
 These are just the most commonly used types of instrumentation tools.  However,
-researchers in academia and industry frequently build new general-purpose as
-well as application-specific tools.  For example, a research group at MIT
-recently created Jolt\cite{jolt}, a tool for detecting and escaping from
-infinite loops with Pin.  During the work for this thesis, I developed a tool
-for to identify which routines in an application perform unaligned memory
-accesses, which can hurt performance.
+researchers in academia and industry are building new general-purpose as well as
+application-specific tools.  For example, a research group at MIT recently
+created Jolt\cite{jolt}, a tool for detecting and escaping from infinite loops
+with Pin\cite{pin}.  During the work for this thesis, I developed a tool for to
+identify which routines in an application perform unaligned memory accesses,
+which can hurt performance.
 
-For the last several years, Pin\cite{pin} has been the framework of choice for
+For the last several years, Pin has been the framework of choice for
 implementing new custom program analysis tools.  Pin's success in this area is
 explained in the creators' PLDI paper, which focuses on Pin's facilities for
 abstracting away architectural details from the instrumentation tool.  A Pin
-tool works by registering a callback to examine instructions and inserting
-instrumentation to execute analysis routines every time the instrumented
-instruction executes.  For example, it is common for a Pin tool to instrument
-every memory access to call a function with information about that memory
-access.  If the analysis routine is small enough, Pin supports decoding the
-routine and inlining into the application code.
+tool works by inserting calls to instrumentation routines, which record
+information about the program execution.  For example, it is common for a Pin
+tool to instrument every memory access to call to a function with information
+about that memory access.  Furthermore, if the instrumentation routine is small
+enough, Pin can decode the routine and inline it into the application code
+stream.
 
-On the other hand, DynamoRIO\cite{bruening_phd} has a larger, but more
-complicated interface.  Similarly, a tool will register for callbacks for new
-code.  However, instead of only being able to insert callbacks to plain C or C++
-methods, a tool has the power to insert custom machine code into the original
-application basic block.  Being able to insert custom machine code is powerful
-and can support highly efficient tools, but it is a daunting task for a
-researcher or a beginner learning the framework.  To help ameliorate the
-burden, DynamoRIO also has facilities for inserting ``clean calls,'' which are
-similar to Pin instrumentation routines.  However, DynamoRIO cannot inline clean
-calls, and is generally not suited to pervasive instrumentation using clean
-calls.
+On the other hand, DynamoRIO\cite{bruening_phd} has a larger and more general
+interface.  Instead of only inserting calls to plain C or C++ routines, a tool
+has the power to insert custom machine code into the application code.  Being
+able to insert custom machine code is powerful and can support highly efficient
+tools, but it is a daunting task for a researcher or a beginner learning the
+framework.  To help ameliorate the burden, DynamoRIO also has facilities for
+inserting ``clean calls,'' which are similar to Pin's instrumentation routines.
+However, DynamoRIO cannot inline clean calls, and is generally not suited to
+pervasive instrumentation using clean calls.
 
 The goal of this thesis is to improve on Pin's inlining techniques and make it
 possible to build performant program anlysis tools with DynamoRIO without
-burdening the tool writer.  Specifically, we build our own inliner for
-DynamoRIO, and focus on supporting {\em partial inlining}, speeding up
-conditional instrumentation without requiring tool writers to rewrite their
-code.
+burdening the tool writer.  Throughout this thesis, we follow the efforts of a
+tool author attempting to implement three tools: an instruction counting tool, a
+memory alignment tool, and a memory access trace tool.  To support the tool
+author, this thesis provides the following contributions:
+
+\begin{enumerate}
+\item An optimization to inline instrumentation routines written in plain C or
+C++ into the application code stream.
+\item An optimization to ``partially inline'' instrumentation routine fastpaths.
+\item A suite of general optimizations operating on x86 machine code leveraging
+the optimization opportunities created by inlining.
+\end{enumerate}
+
+\section{Thesis Overview}
+
+In Chapter \ref{sec:background} we discuss the motivation for using a dynamic
+binary instrumentation framework such as DynamoRIO, Pin, or Valgrind in the
+first place.  In particular, we outline all the benefits they provide and
+challenges they help overcome.  We also take a closer look at the execution
+model of DynamoRIO because it has a great impact on the design of analysis
+tools.
+
+In Chapter \ref{sec:inlining} we start with a na\"ive implementation of
+instruction count and walk through the stages of optimizations that we apply.
+As we go through the stages, the instrumentation code is progressively
+simplified until it starts to look like the version we would write using custom
+machine code.
+
+In Chapter \ref{sec:partial_inlining} we take a look at two more complex tools:
+a memory alignment checker and a memory trace tool.  These tools have the common
+property that the instrumentation has an early conditional check that results
+either in a fast or a slow path being taken.  In the memory alignment tool, no
+action needs to be taken if the memory access is aligned.  In the memory trace
+tool, the trace buffer does not need to be flushed if it is not full.  We
+describe how we go about inlining the fast paths while maintaining correctness
+when the slowpath is taken.
+
+In Chapter \ref{sec:performance} we present the experimental performance results
+we achieved on the SPEC2006 CPU integer benchmarks\cite{spec_cpu_2k6} for all
+three of the tools examined in this thesis.
+
+In Chapter \ref{sec:contributions} we look back on the contributions of this
+thesis and suggest possible directions for future work.

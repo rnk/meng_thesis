@@ -59,15 +59,6 @@
 % Use EPS files in PDFLatex
 \usepackage{epstopdf}
 
-% Define colors for the todo list
-%\usepackage{atveryend} % prereq for todonotes
-% Get \marginpar to work properly on odd/even pages
-%\usepackage{mparhack}
-%\setlength{\marginparwidth}{2cm} % hack to get todonotes to play with MEng template
-%\definecolor{todonotesbg}{rgb}{1, 0.678431373, 0.631372549}
-%\usepackage[colorinlistoftodos, color=todonotesbg,bordercolor=red,textsize=footnotesize]{todonotes}
-%\newcommand{\todo}{}  %If you need to disable todo temporarily
-
 % Prettifies Tables - ex: \toprule, \bottomrule, \midrule
 \usepackage{booktabs}
 
@@ -86,21 +77,21 @@
 % Setup the Hypertext PDF linking
 \hypersetup{
     bookmarks=true,         % show bookmarks bar?
-    unicode=false,          % non-Latin characters in Acrobat’s bookmarks
+    unicode=true,           % non-Latin characters in Acrobat's bookmarks
     pdftoolbar=true,        % show Acrobat’s toolbar?
     pdfmenubar=true,        % show Acrobat’s menu?
     pdffitwindow=false,     % window fit to page when opened
     pdfstartview={FitH},    % fits the width of the page to the window
-    pdftitle=My Spiffy Thesis,    % title
-    pdfauthor=My Awesome Name,     % author
+    pdftitle=Optimization of Na\"ive Dynamic Binary Instrumentation Tools,    % title
+    pdfauthor=Reid Kleckner,     % author
 %   pdfsubject={Subject},   % subject of the document
-%    pdfcreator={Creator},   % creator of the document
-%    pdfproducer={Producer}, % producer of the document
-%    pdfkeywords={keywords}, % list of keywords
+%   pdfcreator={Creator},   % creator of the document
+%   pdfproducer={Producer}, % producer of the document
+%   pdfkeywords={keywords}, % list of keywords
     pdfnewwindow=true,      % links in new window
-    colorlinks=true,       % false: boxed links; true: colored links
-    linkcolor=black,          % color of internal links
-    citecolor=blue,        % color of links to bibliography
+    colorlinks=true,        % false: boxed links; true: colored links
+    linkcolor=black,        % color of internal links
+    citecolor=blue,         % color of links to bibliography
     filecolor=magenta,      % color of file links
     urlcolor=cyan           % color of external links
 }
@@ -146,7 +137,7 @@
 
 %% Specify your thesis title.
 
-\title{Optimization of Na\"{i}ve Dynamic Binary Instrumentation Tools}
+\title{Optimization of Na\"ive Dynamic Binary Instrumentation Tools}
 
 %% Specify your full name.
 
