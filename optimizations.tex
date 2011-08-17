@@ -3,16 +3,15 @@
 The callee optimization process is a pipeline of repeatedly simplifying the
 callee instruction stream to enable further optimizations, just as in a
 traditional static compiler.  The process starts with the decoding, which is
-complicated by the potential lack of debug information.  The decoded
-instruction stream must then be examined to remove calling convention artifacts
-that use the stack, since we may not use the stack if we wish to inline.  We
-also need to remove artifacts like the call+pop PIC sequences on x86\_32, which
-will not work when inlined.  Ideally, we will then have a code sequence that
-uses very little stack space and uses a small number of registers.
-Unfortunately, traditional compilers freely use additional caller-saved
-registers instead of reusing dead registers.  To avoid saving all of these
-extra registers, we perform a series of machine code optimizations to reduce
-register pressure.
+complicated by the potential lack of debug information.  The decoded instruction
+stream must then be examined to remove calling convention artifacts that use the
+stack, since we may not use the stack if we wish to inline.  We also need to
+remove artifacts like the call+pop PIC sequences on x86\_32, which will not work
+when inlined.  Ideally, we will then have a code sequence that uses very little
+stack space and uses a small number of registers.  Unfortunately, traditional
+compilers freely use additional caller-saved registers instead of reusing dead
+registers.  To avoid saving all of these extra registers, we perform a series of
+machine code optimizations to reduce register pressure.
 
 If there is control flow in the code stream, we check if either the taken or
 untaken branch paths can be easily inlined.  If one side of the branch can be
@@ -27,13 +26,14 @@ optimized instruction stream and splice a copy of it into the application code
 stream.
 
 \section{Decoding}
+\label{sec:decoding}
 
 When a tool inserts a clean call, all it provides is a list of machine operand
 arguments and a function pointer to call.  Given a function pointer, it is
 challenging to reliably decode the function itself and determine where it ends.
 
 The na\"ive approach of scanning forward from the function entry to the first
-{\em ret} instruction breaks down quickly.  GCC, for example, when compiling a
+{\tt ret} instruction breaks down quickly.  GCC, for example, when compiling a
 simple if/else construct, will perform a tail merging optimization.  In this
 case, the condition will be checked, and if it fails, control will jump past the
 epilogue to execute the else clause.  After the else, it has a backwards branch
@@ -52,7 +52,7 @@ After decoding, we pass over the stream to point all of the decoded branches at
 labels in the instruction stream instead of the original tool PC values.  This
 allows us to follow a branch to a later point in the stream during optimization.
 
-\section{Prologue and Epilogue}
+\section{Stack Frame Analysis}
 
 Depending on operating system, ISA, and compiler, the instruction stream may
 have a handful of prologue and epilogue instructions for setting up a stack
@@ -64,10 +64,12 @@ set up a stack frame ourselves.
 
 One of the major complications of this analysis is that there are potentially
 multiple exit points from the callee.  For example, an alignment checking tool
-that we want to optimize might have code like the following:
+that we want to optimize, the code might look something like Figure
+\ref{fig:align_code}.
 
-\begin{verbatim}
+\begin{figure}
 % TODO: pretty this up.
+\begin{verbatim}
 void check_access(uintptr_t ea, unsigned size) {
   if ((ea & (size - 1)) == 0) {
     return;
@@ -75,9 +77,33 @@ void check_access(uintptr_t ea, unsigned size) {
   dr_printf("unaligned access to ea %p of size %u!\n", ea, size);
 }
 \end{verbatim}
+\caption{Alignment checking routine.  {\tt ea} is the effective address, and
+{\tt size} is the size of the access.}
+\label{fig:align_code}
+\end{figure}
 
 The compiler may optimize the sample code to use two exit points: one for the
-return statement, and another to set up a tail call to {\tt dr\_printf}.
+return statement, and another to set up a tail call to {\tt dr\_printf}, as
+shown in the disassembly in Figure \ref{fig:align_asm}.
+
+\begin{figure}
+\begin{verbatim}
+0000000000400500 <check_access>:
+  400500:       8d 46 ff                lea    -0x1(%rsi),%eax
+  400503:       48 85 f8                test   %rdi,%rax
+  400506:       75 08                   jne    400510 <check_access+0x10>
+  400508:       f3 c3                   repz retq 
+  40050a:       66 0f 1f 44 00 00       nopw   0x0(%rax,%rax,1)
+  400510:       89 f2                   mov    %esi,%edx
+  400512:       31 c0                   xor    %eax,%eax
+  400514:       48 89 fe                mov    %rdi,%rsi
+  400517:       bf 20 06 40 00          mov    $0x400620,%edi
+  40051c:       e9 bf fe ff ff          jmpq   4003e0 <printf@plt>
+\end{verbatim}
+\caption{Disassembly of optimized alignment checking routine.  Note the {\tt
+retq} return and tail call to {\tt dr\_printf}.}
+\label{fig:align_asm}
+\end{figure}
 
 For the prologue analysis, we effectively want to match up the instructions that
 do and undo the same things.  For example, in setup, if we push the base
@@ -86,60 +112,139 @@ pointer into the base pointer, then we want to find where that is undone in the
 epilogues.
 
 Further complicating the analysis are the different ways of setting up the
-frame.  For example, different compilers may use enter, or a combination of
-pushes, movs, and subtractions to set up a frame.  To leave a frame, it may use
-the {\tt leave} instruction or a combination of movs and pops.  Our algorithm
-abstracts this away.
+frame.  For example, different compilers may use the {\tt enter} instruction, or
+a combination of {\tt push}, {\tt mov}, and {\tt sub} or {\tt lea} to set up a
+frame.  To leave a frame, it may use the {\tt leave} instruction or a
+combination of {\tt mov} and {\tt pop}.  Our algorithm abstracts this away, and
+handles as many standard combinations of frame setup instructions as possible.
+The prologue and epilogue we see the most from GCC when it is preserving the
+frame pointer is shown in Figure \ref{fig:frame_asm}.
+
+\begin{figure}
+\begin{verbatim}
+00000000004004ec <check_access>:
+  4004ec:       55                      push   %rbp
+  4004ed:       48 89 e5                mov    %rsp,%rbp
+  4004f0:       48 83 ec 10             sub    $0x10,%rsp
+  ... body of function ...
+  400522:       c9                      leaveq 
+  400523:       c3                      retq   
+\end{verbatim}
+\caption{Disassembly of unoptimized alignment checking routine.  Multiple
+instructions make the frame, but only one ({\tt leaveq}) removes it.}
+\label{fig:frame_asm}
+\end{figure}
 
 We also look for saves of callee saved registers.  Most often compilers will
 generate matched pushes and pops to save these registers, most likely because
 those instructions are small to encode.  On the other hand, GCC on Linux x86\_64
-seems to prefer movs to save, which we do not handle yet.
+seems to prefer {\tt mov} instructions to save, which we do not handle yet.
 
 Even further complicating our analysis is the compiler's instruction scheduler.
-During the prologue, the compiler is setting up the frame and saving
-caller saved registers that it wants to use.  However, register-to-register
+During the prologue, the compiler is setting up the frame and saving caller
+saved registers that it wants to use.  However, register-to-register
 instructions may be rescheduled into the prologue because they do not interfere
-with the rest of the prologue.  While this is desirable for normal compiled
-code because it improves instruction level parallelsim, it complicates our
-analysis.  Our solution is to ignore such register to register movs while
-matching the prologue and epilogue, so long as they don't clobber any registers
-that have yet to be saved.
+with the rest of the prologue.  While this is desirable for normal compiled code
+because it improves instruction level parallelsim, it complicates our analysis.
+Our solution is to ignore such register to register movs while matching the
+prologue and epilogue, so long as they don't clobber any registers that have yet
+to be saved.  GCC at {\tt -O2} with {\tt -fno-omit-frame-pointer} generates the
+problematic code shown in Figure \ref{fig:scheduled_prologue}.
 
-% That bit about clobbering is not implemented.
-
+\begin{figure}
 \begin{verbatim}
-TODO: Provide code sample of prologue setup with scheduling.
+0000000000400500 <check_access>:
+  400500:       8d 46 ff                lea    -0x1(%rsi),%eax
+  400503:       55                      push   %rbp
+  400504:       48 85 f8                test   %rdi,%rax
+  400507:       48 89 e5                mov    %rsp,%rbp
+  40050a:       75 04                   jne    400510 <check_access+0x10>
+  40050c:       c9                      leaveq 
+  40050d:       c3                      retq   
+  40050e:       66 90                   xchg   %ax,%ax
+  400510:       c9                      leaveq 
+  400511:       89 f2                   mov    %esi,%edx
+  400513:       31 c0                   xor    %eax,%eax
+  400515:       48 89 fe                mov    %rdi,%rsi
+  400518:       bf 20 06 40 00          mov    $0x400620,%edi
+  40051d:       e9 be fe ff ff          jmpq   4003e0 <printf@plt>
 \end{verbatim}
+\caption{Alignment routine built with GCC {\tt -O2 -fno-omit-frame-pointer}.
+Note the register instructions mixed with frame setup.}
+\label{fig:scheduled_prologue}
+\end{figure}
 
 \section{Inlining}
 
-%The design considerations for the inliner are guided mainly by the transparency
-%restrictions we must maintain.  Our main concerns are:
+The goal of inlining is to execute the instrumentation code from the application
+code fragment in the code cache and avoid the expensive, full context switch to
+the clean stack.  The main challenges are ensuring that the instrumentation code
+runs correctly from the code cache, while disturbing the application's code as
+little as possible.  All of the concerns from Section \ref{sec:transparency} on
+transparency must be dealt with.  In particular, we still cannot touch the
+application stack.
 
-%\begin{itemize}
-%\item We may not clobber application registers.
-%\item We may not touch the application stack.  The application may be using
-%memory past the end of the stack, such as with the Linux x86\_64 red zone, or
-%it may be a guard page.
-%\item When inlining, the PC of the instruction will be from the code cache, not
-%the original tool code.
-%\end{itemize}
+\subsection{Clean calls}
 
-%Therefore, we start by switching to a clean stack.
+% TODO: Consider moving clean call description to background chapter?
 
-% Procedure:
-% - Materialize args
-% - Re-optimize to fold args into callee
-% - Re-analyze register usage
-% - Switch dstack
-% - Save used regs
-% - Insert code, clear translation pc, assume no faults
-% - Restore used regs
-% - Switch to appstack
+Inserting a normal clean call emits code that takes the following steps at the
+call site:
 
-When we decide to inline a function, we emit the following code at the call
-site:
+\begin{enumerate}
+\item Switch to a clean stack.
+\item Save all registers.
+\item Save the flags register.
+\item Save ``volatile'' XMM registers.
+\item Materialize arguments into parameter registers.
+\item Call tool routine.
+\item Restore ``volatile'' XMM registers.
+\item Restore the flags register.
+\item Restore all registers.
+\item Switch back to the application stack.
+\end{enumerate}
+
+The set of XMM registers that is saved varies by the platform calling
+convention, which specifies which XMM registers should be considered clobbered
+after a call.  Even if the tool is avoiding the use of floating point
+instructions, it is still possible for the compiler to use the XMM registers by
+vectorizing loops.  More likely, however, is that the tool may call {\tt
+memcpy}.  In recent versions of glibc, {\tt memcpy} will make use of the XMM
+registers to widen the load and store width, which will clobber the caller-saved
+XMM registers.  Therefore DynamoRIO must conservatively save this set of
+registers, even though they are most likely unused.
+
+\subsection{Criteria}
+
+Inlining is only possible if we are able to analyze the callee and only if the
+analysis suggests that doing so would be profitable.  The analysis is designed
+so that if there are any corner cases that the analysis cannot handle reliably,
+it can fail, and inlining will fail.  For example, if the stack pointer is
+dynamically updated in the middle of the function, this inhibits stack usage
+analysis.  Therefore we bail out in such cases.  Assuming our analysis is
+successful, we only inline if the following criteria apply:
+
+\begin{itemize}
+\item The callee is a leaf function.  Our definition of leaf function is
+conservative, meaning it must not have any calls, trapping instructions,
+indirect branches, or direct branches outside of the function.
+\item The simplified callee instruction stream is no more than 20 instructions.
+\item The callee does not use XMM registers.
+\item The callee does not use more than a fixed number of general purpose
+registers.  We have not picked an appropriate limit yet.
+\item The callee must have a simple stack frame that uses at most one stack
+location.
+\item The callee may only have as many arguments as can be passed in registers
+on the current platform, or only one if the native calling convention does not
+support register parameters.
+\end{itemize}
+
+\subsection{Code Outline}
+
+Code at the site of an inlined call takes similar steps to a normal clean call,
+but it is able to avoid much of the work from the clean call.  For example,
+unused registers are not saved.  Code using XMM registers is not inlined, and
+therefore they need not be saved.
 
 \begin{enumerate}
 \item Switch to a clean stack.
@@ -152,35 +257,509 @@ site:
 \item Switch back to the application stack.
 \end{enumerate}
 
-We also have an optional optimization that can avoid stack switching in some
-cases, but allocates additional TLS space.  TLS space is limited, particularly
-on Windows, where it is shared with the application due to the {\tt GS} segment
-base being reset to zero on every context switch.
-
-% TODO: This is a poor description, maybe should have own section, rewrite.
+% TODO: Is it possible to construct a benchmark to argue that stack switching is
+% more expensive than another couple of loads and stores?  Obviously TLS is
+% better when it works because it's less work, but I would expect stack
+% switching to be "expensive" due to micro-architecture optimizations about
+% stack usage.
 
 \subsection{Switch to Application Stack}
 
 To switch stacks, we first save the application stack value into a reserved TLS
 scratch slot.  Another TLS scratch slot is used to locate the thread-local {\tt
 dcontext} structure, which contains a pointer to the base of a clean stack, or
-{\tt dstack}.  This procedure gives us the following code sequence on x86\_64:
+the {\tt dstack}.  This procedure gives us the code sequence in Figure
+\ref{fig:stack_switch} on x86\_64.
 
+\begin{figure}
 \begin{verbatim}
 mov    %rsp             -> %gs:0x00   # Save application stack pointer.
 mov    %gs:0x20         -> %rsp       # Load dcontext pointer.
 mov    0x000002c0(%rsp) -> %rsp       # Load dstack pointer.
+lea    0xfffffd50(%rsp) -> %rsp       # Allocate the stack frame.
 \end{verbatim}
+\caption{Stack switch code sequence.}
+\label{fig:stack_switch}
+\end{figure}
+
+This code fragment is short, but not as well optimized as it could be.  If we
+chose to keep the {\tt dstack} base pointer in the TLS space along with the {\tt
+dstack} pointer, we could avoid the second load.  The second load depends on the
+first, and is followed by many stores using the stack pointer, creating a likely
+stall.  As discussed previously, TLS scratch space is a scarce resource, and
+stack switching must be used when such space is unavailable, therefore we have
+not made the changes necessary for this optimization.
+
+To allocate space for the stack frame, we use the {\tt lea} instruction instead
+of {\tt sub} to subtract from {\tt rsp} without modifying the flags register.
+This particular instruction can also be elided if we keep the {\tt dstack} value
+in the TLS space.  It would require standardizing on a frame size, and storing
+the thread local {\tt dstack} value after the subtraction of the frame size.
+
+\subsection{Alternative: Use TLS}
+\label{sec:tls_scratch}
+
+Alternatively, instead of switching stacks, which is expensive, we also have an
+optional optimization that can avoid stack switching in some cases, but
+allocates additional TLS space.  TLS space is limited, particularly on Windows,
+as discussed in Section \ref{sec:windows_tls}.  If the application does not
+require many TLS slots, or the application is running on Linux, this
+optimization is safe, and will perform all saves and restores from the TLS space
+instead of from the clean stack.
 
 \subsection{Register Saving}
 
 Once we have switched stacks, we allocate space for an {\tt mcontext} structure
 within which to save registers.  We use this structure layout in order to
-maintain compatibility with tools with partially inlined routines that call
-{\tt dr\_get\_mcontext}, which will give the tool access to this structure.
+maintain compatibility with tools with partially inlined routines that call {\tt
+dr\_get\_mcontext}, which will give the tool access to this structure.
 
-\section{Partial inlining}
+The register saving code is a repetitive series of register stores at various
+stack offsets.  Again, only the registers that are used are saved, even though
+the layout of the full {\tt mcontext} structure is used.  If the flags register
+was used or clobbered, we save it.  An example sequence saving registers {\tt
+rax}, {\tt rdi}, and {\tt r9} and the flags register is given in Figure
+\ref{fig:reg_save}.
 
-\section{Coalescing}
+\begin{figure}
+\begin{verbatim}
+mov    %rax -> 0x48(%rsp)       # Save rax.
+mov    %rdi -> 0x10(%rsp)       # Save rdi.
+mov    %r9 -> 0x58(%rsp)        # Save r9.
+lahf   -> %ah
+seto   -> %al
+mov    %rax -> 0x00000090(%rsp) # Save aflags.
+\end{verbatim}
+\caption{Register saving code sequence.}
+\label{fig:reg_save}
+\end{figure}
 
-\section{RLE \& DSE}
+\subsection{Argument Materialization}
+
+Arguments to instrumentation calls in DynamoRIO are specified as x86 instruction
+operands evaluated in the application context.  However, we can only materialize
+arguments after we have switched to the DynamoRIO execution context, or we will
+clobber the destination register of the argument.  This creates a chicken and
+egg problem, because the argument may, for example, reference the stack pointer,
+which is clobbered.  However, we cannot evaluate the operand before we switch
+stacks.  Therefore, we must generate additional code to evaluate the operands.
+
+For immediate integers and pointers, there is no complication.  We simply use a
+{\tt mov} instruction to materialize the value in the argument register.
+
+For register operands, if they were unused by the routine, they will not have
+been saved to the stack.  Therefore, the application value is still live, so we
+perform a simple register-to-register {\tt mov}.  If the value was used in the
+inline code, we will have already saved it, so we load it back from the stack.
+This works for materializing registers that have already been clobbered by
+argument materialization, because we will only materialize an argument in a
+register if that register is used inline.  For example, on Linux x86\_64, if we
+have already clobbered {\tt rdi} for the first argument, and the second argument
+is {\tt rdi}, we emit a load from the stack slot for {\tt rdi} into {\tt rsi}.
+Finally, if the register is {\tt rsp}, we have a special case.  The application
+stack pointer is saved in the TLS scratch space, so we must restore it from
+there.
+
+X86 memory operands complicate matters, because they may use two registers for
+the base and index.  Also, a memory operand may have a size, meaning the
+argument should be the value loaded from that address, or it may be unsized,
+implying that the argument should be the effective address of the memory
+operand.  Depending which is requested, we use a load or a {\tt lea}
+instruction.  Similar to the register operand case, we need to need to
+materialize the registers used by the operand before we can materialize the
+argument.  We also cannot use the original registers of the operand, because
+they may now contain materialized arguments.  Therefore, we load the base into
+the destination register for the argument, because we know it will be dead after
+the load or address computation.  We then modify the base register of the memory
+operand to be the destination register.  If the index has been clobbered, then
+we need a second dead register.  We hard code the choice of {\tt rax} for
+holding the index register because there are no calling conventions that
+DynamoRIO supports that use {\tt rax} as a register parameter, and it is often
+already saved due to being used in the inline code sequence.  If it is not
+already saved, it will be marked for saving later when we re-analyze the code
+sequence with argument materialization.
+
+For a complete example, if the argument is the effective address of the memory
+operand {\tt 0x44(\%rsp, \%rdi, 4)}, the we emit the code in Figure
+\ref{fig:arg_mat_lea}.
+
+\begin{figure}
+\begin{verbatim}
+mov    %gs:0x00 -> %rdi                 # Load app rsp into rdi.
+mov    0x10(%rsp) -> %rax               # Load app rdi into rax.
+lea    0x44(%rdi,%rax,4) -> %rdi        # Compute effective address into rdi.
+\end{verbatim}
+\caption{Materializing {\tt 0x44(\%rsp, \%rdi, 4)} into {\tt rdi}.}
+\label{fig:arg_mat_lea}
+\end{figure}
+
+\section{Partial Inlining}
+
+The major contribution of this thesis is the ability to profitably inline
+instrumentation routines that perform conditional program analysis without
+requiring invasive changes to the analysis tool.  Many common instrumentation
+tools need to instrument many instructions, but often they are only interested
+in the execution of a handful of instructions.  For example, a race detector
+cannot predict which instructions will perform racing memory accesses, so it
+must instrument all memory accesses.  At every access, it performs checks to
+detect if a race occurred.  In order to achieve good performance, the check be
+as efficient as possible.  The vast majority of accesses are non-racing, so they
+must be discarded quickly with a fast path.  Many tools are structured this way,
+and our framework seeks to exploit this structure to improve performance.  Below
+is a list of tools that can potentially benefit from this optimization.
+
+\begin{enumerate}
+\item A race detector has a fast path for non-racing accesses.
+\item A memory debugger will have a fast path assuming that all reads are from
+initialized memory.
+\item A memory alignment tool is not interested in unaligned memory accesses.
+\item A memory trace tool fills a buffer during execution, and most of the time
+the buffer will not yet be full, so insertion is fast.
+\end{enumerate}
+
+Before we can analyze an instrumentation routine to see if partial inlining
+applies, we first need to be able to reliably decode it, as described in Section
+\ref{sec:decoding}.  Robust decoding is much more important when attempting
+partial inlining, because the routine may be much larger and more complicated
+than an unconditional routine with no control flow.
+
+Once we have the full routine instruction stream, we scan from the entry point
+to the first control flow instruction.  If it is a conditional branch, we scan
+forward from both branch targets: the fall-through target and the branch taken
+target.  If the first control flow instruction is a {\tt ret} instruction, we
+say that path is a ``fastpath.''  If both paths are fast, we do not perform
+partial inlining, and continue to inline as normal.  If neither path is fast, we
+abandon partial inlining, and most likely will fail to inline the routine at
+all.
+
+If one path is fast and the other is not, we designate the other path the
+``slowpath.''  We then delete all instructions that do not flow directly from
+the entry to the conditional branch and then to the fastpath.  In place of the
+slowpath, we insert a synthetic call instruction which we will expand later, and
+a jump to the {\tt ret} instruction on the fastpath.
+
+Ideally, when the slowpath executes, we would like to set up the stack frame and
+registers exactly as they would be had we been executing a clean call up until
+the conditional branch.  This, however, is a monumentally challenging task.
+Therefore, we instead perform a regular clean call to the beginning of the
+routine.  However, this creates a problem if the entry path has side effects.
+If this is the case, they will be executed twice, once during the inline
+sequence, and again when we call the routine from the beginning.  Our solution
+to this problem is to identify all instructions with side effects and attempt to
+defer them until after the check executes.
+
+To identify global side effects, we simply test if the instruction in question
+writes non-stack memory.  We identify a non-stack write as anything writing to
+global variables or to memory addressed through any non-stack pointer register.
+
+Next, we attempt to defer the side effects until after the conditional branch.
+This can be tricky, because the conditional branch may depend on memory reads
+which depend on memory writes that we want to defer.  Detecting these cases is
+tricky and requires use of our register liveness analysis described in Section
+\ref{sec:liveness}.  Our algorithm starts at the conditional branch, and goes
+backwards towards the entry point deferring all instructions which can be moved
+past the branch.  An instruction can be moved past the branch if:
+
+\begin{enumerate}
+\item Its result is unused by the conditional branch, meaning our analysis
+starting from the branch considers it dead.
+\item It does not use any registers clobbered by the branch or its dependent
+instructions, meaning the instructions which could not be deferred.
+\end{enumerate}
+
+Figure \ref{fig:memtrace_defer} shows the instruction stream of our memory trace
+tool routine before and after deferring side effects.
+
+\begin{figure}
+\begin{verbatim}
+BEFORE DEFER:
+mov    <rel> 0x000000007221b7a0 -> %r8d 
+lea    <rel> 0x000000007221b7c0 -> %r9 
+mov    %r8d -> %eax 
+add    $0x00000001 %r8d -> %r8d 
+lea    (%rax,%rax,2) -> %rax 
+cmp    %r8d $0x000003ff 
+lea    0x00(,%rax,8) -> %r10 
+mov    %rdi -> (%r9,%rax,8)                           # Write
+mov    %rsi -> 0x08(%r10,%r9,1)                       # Write
+lea    <rel> 0x000000007221b7d0 -> %rsi 
+mov    %edx -> (%rsi,%rax,8)                          # Write
+mov    %ecx -> 0x04(%r10,%rsi,1)                      # Write
+mov    %r8d -> <rel> 0x000000007221b7a0               # Write
+jbe    $0x0000000041341560                            # Cond branch
+ret    %rsp (%rsp) -> %rsp 
+
+AFTER DEFER:
+mov    <rel> 0x000000007221b7a0 -> %r8d 
+mov    %r8d -> %eax 
+add    $0x00000001 %r8d -> %r8d 
+cmp    %r8d $0x000003ff 
+jbe    $0x0000000041341560                            # Cond branch
+lea    <rel> 0x000000007221b7c0 -> %r9 
+lea    (%rax,%rax,2) -> %rax 
+lea    0x00(,%rax,8) -> %r10 
+mov    %rdi -> (%r9,%rax,8)                           # Write
+mov    %rsi -> 0x08(%r10,%r9,1)                       # Write
+lea    <rel> 0x000000007221b7d0 -> %rsi 
+mov    %edx -> (%rsi,%rax,8)                          # Write
+mov    %ecx -> 0x04(%r10,%rsi,1)                      # Write
+mov    %r8d -> <rel> 0x000000007221b7a0               # Write
+ret    %rsp (%rsp) -> %rsp 
+\end{verbatim}
+\caption{Memory trace buffer filling routine before and after deferring side
+effects.}
+\label{fig:memtrace_defer}
+\end{figure}
+
+If we are unable to defer side effects until after the branch, we abandon
+partial inlining and leave the instruction stream unmodified.
+
+One of the unfortunate aspects of clean calls is that they greatly disturb code
+layout.  On Linux x86\_64, a single clean call expands to at least 75
+instructions and 542 bytes.  Emitting this much code at every slowpath site
+would greatly increase our code size and lower the hit rate of the instruction
+cache.  Therefore, we emit the slowpath transition code in a code cache
+maintained on the side.  The slowpath code then consists of rematerializing
+arguments and making a call to the shared transition code.
+
+The transition code is similar to that of a clean call, except it must not save
+registers that were already saved inline.  Registers that were saved inline
+likely no longer contain the original application value.  Therefore, it inverts
+the set of registers that were saved inline and saves those.
+
+With this approach, we have been able to successfully partially inline two
+sample clients we constructed: an alignment checking tool, and a memory trace
+tool.
+
+% TODO Discuss alternative designs, ala Pin?  Or put in contributions?
+% TODO Discuss performance?
+
+\section{Optimization}
+
+In order to make inlining profitable, we discovered that it was important to
+apply traditional compiler optimization techniques to the code sequence we
+wished to inline.
+
+Traditional compiler analysis is performed on a control flow graph using a
+representation of basic blocks, which are single-entry single-exit lists of
+instructions.  Optimization is usually done with the help of abstract
+interpretation and control-sensitive data flow analyses.  Rather than
+introducing an entire compiler middle to back end into DynamoRIO, we focus on
+optimizing a single basic block in the absence of control flow.  This is a much
+more tractable problem.
+
+At one point, we were considering basing our analyses and transformations on the
+LLVM\cite{llvm} framework, but this approach was passed over due to performance
+concerns and complications of integrating with such a large C++ project.
+
+% TODO Compare to post-link machine code optimization techniques?
+
+\subsection{Liveness Analysis}
+\label{sec:liveness}
+
+The basis for most of our transformations is register liveness analysis.  This
+is a standard dataflow analysis, starting at the end of the instruction stream,
+and stepping backwards, maintaining a set of live and dead registers based on
+which registers instructions read from.  We also model the liveness of various
+bits of the x86 flags register, so we can know if a {\tt cmp} or {\tt add}
+instruction is needed by a branch or {\tt addc} instruction.
+
+\subsection{Live Range Rewriting}
+
+The operation that we perform perhaps the most is rewriting a live range defined
+by a register, its definition, and its final use.  For example, if we have an
+instruction which produces a value in a register, we may have identified a way
+of folding the other source operand into the future uses of the register.  We
+need a general way of visiting all uses of the register in the live range and
+updating the instructions which use it.  Our live range rewriting facility
+provides this.
+
+\subsection{Dead Code Elimination}
+
+Flowing immediately from having a register liveness analysis, we can immediately
+use that analysis to delete dead instructions.  Dead instructions arise often
+when performing partial inlining, because code that may have used a register
+previously may now be deleted, rendering the instruction dead.
+
+We have to apply the usual precautions of not deleting instructions which have
+purposes besides using the result, such as control flow instructions, memory
+writes, and labels.
+
+\subsection{Copy Propagation}
+
+Again, from liveness information, we can detect when it is profitable to
+eliminate unnecessary copies.  If the source register is dead and the
+destination of a copy is used, we can simply replace the live range of the
+destination with the source, so long as the source is not clobbered before all
+uses of the destination.
+
+\subsection{Register Reuse}
+
+In order to avoid instruction anti-dependencies, compilers try to use different
+registers and schedule instructions so that computations can be performed in
+separate registers in parallel.  However, when performing instrumentation,
+avoiding the use of a single register pays many dividends because it avoids
+saving and restoring that register, which are an extra two memory instructions.
+Also, on super-scalar architectures which support register
+renaming\cite{reg_renaming}, anti-dependencies are less of a performance
+problem.  Therefore, the goal of this transform is to make the code use as few
+registers as possible.  We search for instructions which define registers that
+were previously unused by any other instruction, and test if there are any dead,
+but already used registers.  If this is the case, we attempt to rewrite the live
+range of this register to use a different register.  If this succeeds, we have
+reduced the register pressure created by the inline code sequence.
+
+\subsection{Folding Immediates}
+
+Perhaps the most classic and trivial optimization that compilers generally
+perform is constant folding.  Although this is more easily done with a tree or
+SSA representation, at the machine code level, we do this by searching for
+instructions which materialize immediate values into registers, and then proceed
+to use the register.  When we find such a materialization, we check if we can
+rewrite the uses of the register to use an immediate instead.
+
+The most obvious use case for this is a tool like instruction count.  In this
+situation, we wish to call a routine after every basic block with a single
+integer argument and add that to a global variable.  Using this optimization, we
+are able to fold the argument materialization into the add, so the routine ends
+up not requiring any scratch registers.
+
+We also have logic for folding an immediate into a complex x86 memory operand,
+so offsets which are passed as constant integer arguments to instrumentation
+routines can be folded into the memory access.
+
+\subsection{Flags Avoidance}
+
+Many x86 arithmetic instructions modify the x86 flags register.  This is
+problematic, because it means we have to save and restore the bits of the flags
+register that we touch.  This can be done either using the {\tt pushf} and {\tt
+popf} instructions, or a sequence of {\tt lahf}, {\tt seto}, {\tt lahf}, and
+{\tt add}.  The {\tt popd} instruction turns out to be fairly expensive, because
+it sets many complex execution flag like the single-stepping trap flag for
+debuggers.  Also, the {\tt lahf} sequence avoids stack usage, so it is
+preferred.
+
+However, we have the opportunity to transform inlined code to avoid flags usage
+if possible.  A classic example of this that compiler use frequently is rather
+than using {\tt add}, which accepts a source and a destination, a compiler can
+use {\tt lea}, which accepts two sources and a destination.  Because {\tt lea}
+is not designed for arithmetic, it does not modify flags.  Therefore, we have a
+pass which can automatically perform this transformation.  Unfortunately, when
+transforming arithmetic instructions using memory operands, we have to pick a
+temporary register and separate the load and store.  If we can pick one that is
+already used and dead, we avoid one extra save and restore.  If not, we only
+avoid the flags instructions, which is a negligible win.
+
+\subsection{Folding {\tt lea} Instructions}
+
+Using the same logic which we use to fold immediates into memory operands, we
+also have logic for combining two memory operands.  It is not clear to me why a
+static compiler is not able to perform the optimizations we perform here, but we
+provide a code sample in Figure \ref{fig:fold_lea} that shows the benefits of
+our folding optimization.  It eliminates the use of {\tt r10} by swapping the
+base and index registers in further memory operands and merging the scale of 8
+into the memory operand.  While our optimized code sequence may be recomputing
+extra values, our benchmarks show this as an improvement because it requires us
+to save one less register.
+
+\begin{figure}
+\begin{verbatim}
+BEFORE FOLDING:
+lea    <rel> 0x000000007221b7a0 -> %r9
+lea    (%rax,%rax,2) -> %rax
+lea    0x00(,%rax,8) -> %r10                    # r10 is now rax * 8
+mov    %rdi -> (%r9,%rax,8)
+mov    %rsi -> 0x08(%r10,%r9,1)                 # r10 is used
+lea    0x10(%r9) -> %rsi
+mov    $0x00000008 -> (%rsi,%rax,8)
+mov    $0x00000001 -> 0x04(%r10,%rsi,1)         # r10 is used
+mov    %r8d -> 0xffffffe0(%r9)
+
+AFTER FOLDING:
+lea    <rel> 0x000000007221b7a0 -> %r9
+lea    (%rax,%rax,2) -> %rax
+mov    %rdi -> (%r9,%rax,8)
+mov    %rsi -> 0x08(%r9,%rax,8)                 # Swap base/index, use scale
+mov    $0x00000008 -> 0x10(%r9,%rax,8)
+mov    $0x00000001 -> 0x14(%r9,%rax,8)          # Swap base/index, use scale
+mov    %r8d -> 0xffffffe0(%r9)
+\end{verbatim}
+\caption{Memory trace buffer filling routine before and after folding {\tt lea}
+into memory operands.}
+\label{fig:fold_lea}
+\end{figure}
+
+\subsection{RLE and DSE}
+
+Redundant load elimination (RLE) and dead store elimination (DSE) are classic
+compiler optimizations that we found useful for optimizing tools.  The original
+motivation for introducing these was to avoid redundantly saving and restoring
+registers when we were able to coalesce instrumentation routines together, but
+these two classic optimizations have other uses.
+
+The logic for RLE is that if there are two loads from the same memory operand
+without any memory writes between them, we can use the result of the first
+instead of reloading.  The usual caveats apply that the register the value was
+loaded into must still be live and may not be clobbered by the last use of the
+load we wish to delete.
+
+Dead store elimination is similar, in that if there is a store to memory,
+followed by no reads from memory, followed by a store to the same memory
+location, we can delete the first store.  Because we do not need to rewrite any
+further instructions, this is simpler than RLE.
+
+The best example of successful RLE and DSE is in a coalesced instruction count
+tool.  After applying coalescing and other optimizations, we are able to perform
+the transformation in Figure \ref{fig:rle_and_dse}.  Furthermore, our {\tt lea}
+folding optimization can clean this up further to a single {\tt lea} instead of
+4 single adds.
+
+\begin{figure}
+\begin{verbatim}
+BEFORE RLE DSE:
+mov    %rax -> 0xfffffd98(%rsp)                 # Save
+mov    <rel> 0x000000007221ab58 -> %rax         # Load count
+lea    0x01(%rax) -> %rax 
+mov    %rax -> <rel> 0x000000007221ab58         # Store count
+mov    <rel> 0x000000007221ab58 -> %rax         # Load count
+lea    0x01(%rax) -> %rax 
+mov    %rax -> <rel> 0x000000007221ab58         # Store count
+mov    <rel> 0x000000007221ab58 -> %rax         # Load count
+lea    0x01(%rax) -> %rax 
+mov    %rax -> <rel> 0x000000007221ab58         # Store count
+mov    <rel> 0x000000007221ab58 -> %rax         # Load count
+lea    0x01(%rax) -> %rax 
+mov    %rax -> <rel> 0x000000007221ab58         # Store count
+mov    0xfffffd98(%rsp) -> %rax                 # Restore
+
+AFTER RLE DSE:
+mov    %rax -> 0xfffffd98(%rsp)                 # Save
+mov    <rel> 0x000000007221ab58 -> %rax         # Load count
+lea    0x01(%rax) -> %rax 
+lea    0x01(%rax) -> %rax 
+lea    0x01(%rax) -> %rax 
+lea    0x01(%rax) -> %rax 
+mov    %rax -> <rel> 0x000000007221ab58         # Store count
+mov    0xfffffd98(%rsp) -> %rax                 # Restore
+\end{verbatim}
+\caption{Instruction count tool before and after RLE and DSE.}
+\label{fig:rle_and_dse}
+\end{figure}
+
+\subsection{Call Coalescing}
+
+Finally, we have a call coalescing optimization, which tries to schedule clean
+calls together to avoid redundant stack switches and register spills.  When we
+insert a call, we start by inserting a pseudo-instruction which contains
+information about the call.  Later, when ready to emit the basic block, we see
+if we can move these calls around to bring them closer together.  If the call
+has register arguments, we avoid moving it outside the live range of its
+register arguments or past any memory writes.
+
+Once the calls are scheduled, we expand them to another level of pseudo-ops of
+stack switches and register saves and register restores.  Before lowering these
+pseudo-ops, we pass over the instruction stream deleting unnecessary stack
+switches and register spills.  After that, we perform another optimization pass
+to identify opportunities like those shown in Figure \ref{fig:rle_and_dse}.
+
+% TODO summary of benefits of optimizations, why we need them, etc?

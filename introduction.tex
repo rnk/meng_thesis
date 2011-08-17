@@ -2,26 +2,46 @@
 
 Dynamic program analysis tools built with dynamic binary instrumentation have
 proven indispensable for developing complex native applications.  Memory safety
-tools like Valgrind\cite{TODO} have spotted innumerable Heisenbugs.  Race
-detectors such as FastTrack\cite{TODO}, Eraser\cite{TODO}, Helgrind\cite{TODO},
-and Thread Sanitizer\cite{TODO} have made programming with shared memory
-feasible.  Cache simulators and branch prediction simulators such as
-Cachegrind\cite{TODO} provide a way to optimize cache usage in a given program.
+tools like Valgrind\cite{valgrind} have spotted innumerable Heisenbugs.  Race
+detectors such as Helgrind\cite{helgrind} and Thread Sanitizer\cite{tsan} have
+made programming with shared memory feasible.  Cache simulators and branch
+prediction simulators such as Cachegrind\cite{valgrind_workloads} provide a way
+to optimize cache usage in a given program.
 
 These are just the most commonly used types of instrumentation tools.  However,
 researchers in academia and industry frequently build new general-purpose as
 well as application-specific tools.  For example, a research group at MIT
-recently created a tool for detecting and escaping from infinite loops with
-Pin.\cite{TODO}  During the work for this thesis, I developed a tool for
-to identify which routines in an application perform unaligned memory accesses,
-which can hurt performance.
+recently created Jolt\cite{jolt}, a tool for detecting and escaping from
+infinite loops with Pin.  During the work for this thesis, I developed a tool
+for to identify which routines in an application perform unaligned memory
+accesses, which can hurt performance.
 
-For the last several years, Pin has been the framework of choice for
+For the last several years, Pin\cite{pin} has been the framework of choice for
 implementing new custom program analysis tools.  Pin's success in this area is
 explained in the creators' PLDI paper, which focuses on Pin's facilities for
-abstracting away architectural details from the instrumentation tool.  Most
-importantly, Pin tools are expected to create instrumentation using callbacks
-into C.  Pin supports inlining simple instrumentation functions, but most
-non-leaf callbacks do not meet this criteria.
+abstracting away architectural details from the instrumentation tool.  A Pin
+tool works by registering a callback to examine instructions and inserting
+instrumentation to execute analysis routines every time the instrumented
+instruction executes.  For example, it is common for a Pin tool to instrument
+every memory access to call a function with information about that memory
+access.  If the analysis routine is small enough, Pin supports decoding the
+routine and inlining into the application code.
 
-EXAMPLE CITATION.  \cite{bruening_phd}
+On the other hand, DynamoRIO\cite{bruening_phd} has a larger, but more
+complicated interface.  Similarly, a tool will register for callbacks for new
+code.  However, instead of only being able to insert callbacks to plain C or C++
+methods, a tool has the power to insert custom machine code into the original
+application basic block.  Being able to insert custom machine code is powerful
+and can support highly efficient tools, but it is a daunting task for a
+researcher or a beginner learning the framework.  To help ameliorate the
+burden, DynamoRIO also has facilities for inserting ``clean calls,'' which are
+similar to Pin instrumentation routines.  However, DynamoRIO cannot inline clean
+calls, and is generally not suited to pervasive instrumentation using clean
+calls.
+
+The goal of this thesis is to improve on Pin's inlining techniques and make it
+possible to build performant program anlysis tools with DynamoRIO without
+burdening the tool writer.  Specifically, we build our own inliner for
+DynamoRIO, and focus on supporting {\em partial inlining}, speeding up
+conditional instrumentation without requiring tool writers to rewrite their
+code.

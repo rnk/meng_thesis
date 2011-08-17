@@ -1,4 +1,21 @@
 \chapter{Contributions}
 
-And so, we have (hopefully) made it easier to build more performant program
-analysis tools.
+%And so, we have (hopefully) made it easier to build more performant program
+%analysis tools.
+
+Using the optimizations presented in this thesis, tool authors are able to
+quickly build performant dynamic instrumentation tools without having to write
+custom assembly.  First, we have created an optimization which performs
+automatic inlining of short instrumentation routines.  Our inlining optimization
+can achieve as much as 50 times speedup as shown by our instruction count
+benchmarks.  Second, we have built a novel framework for performing partial
+inlining which handles cases where simple inlining fails due to the complexity
+of handling uncommon cases.  Partial inlining allows us to maintain the same
+callback interface, while accelerating the common case of conditional analysis.
+Finally, we present a suite of standard compiler optimizations operating on
+instrumented code.  With these optimizations, we are able to ameliorate the
+register pressure created by inlining and avoid unecessary spills.  Without our
+suite of optimizations, we would not be able to successfully inline many of our
+example tools.  Once these tools have been contributed back to DynamoRIO, we
+hope to see more tool authors use DynamoRIO to build quickly novel dynamic
+analysis tools that run fast enough to be widely adopted.

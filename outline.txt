@@ -1,0 +1,20 @@
+Saman wants a "story" for motivating thesis.  Tell the story of developing two
+clients: an instruction counting client, and a memory alignment client.
+
+How about an opcodemix client?  This is actually easy to optimize the trivial
+implementation of.  For every instr, insert call to increment array element
+indexed by argument of opcode enum.  Inline, fold lea, bam.  Con: requires
+re-running benchmarks.
+
+Possible outline:
+
+- Introduction.  Tell story of tools, why they are good, examples of what they
+  can do.  Tell story of writing instruction count client.
+
+- Background.
+  - Execution model.  Dynamic instrumentation framework has a code cache,
+    interprets basic block by basic block, instruments, and puts in cache.
+  - Transparency.  All framework operations are hidden from application.
+    - Ex: Stack avoidance.
+    - Ex: 
+  - Context switching.

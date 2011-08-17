@@ -1,3 +1,150 @@
 \chapter{Performance}
 
-TODO: Insert numbers and charts here.
+To measure the performance of our instrumentation optimizations, we ran the
+SPEC2006 CPU integer benchmark suite under the instrumentation of various tools.
+In particular, we focused on an instruction counting tool, a memory alignment
+checker, and a memory trace tool.  Each tool exercises different aspects of our
+optimizations.  Instruction count, for example, is a very simple tool which is
+amenable to inlining.  The alignment tool has a simple check before diagnosing
+an unaligned access, and is amenable to partial inlining.  The memory trace tool
+checks if the buffer is full before inserting, and is also amenable to partial
+inlining.
+
+Due to the large slowdowns we wish to measure in unoptimized tools, we only ran
+the benchmarks on the ``test'' input size instead of the reference input size.
+However, this makes some benchmarks run very quickly, on the order of zero to
+one seconds, so we removed any benchmark that completed in less than two seconds
+natively.  This removed the {\tt xalancbmk}, {\tt libquantum}, {\tt omnetpp},
+and {\tt gcc} benchmarks.  We were unable to run the {\tt perl} benchmark
+natively at all, so we removed it as well.
+
+The measurements were taken on a single machine from a set of machines donated
+by Intel to the MIT Computer Science and AI Lab (CSAIL).  The machine uses a
+12-core Intel Xeon X5650 CPU running at 2.67 GHz.  The machine has 48 GB of RAM,
+and 12 MB of cache per core.  We disabled hyperthreading to avoid the effects of
+sharing caches between threads on the same physical core.  All benchmarks were
+performed on CSAIL's version of Debian, which uses 64-bit Linux 2.6.32.  We used
+the system compiler, which is Debian GCC 4.3.4.
+
+\section{Instruction Count}
+
+Figure \ref{fig:inscount_all} shows our performance across benchmarks from the
+suite for instruction count at various levels of optimization.  The optimization
+level refers to how aggressive our inlining optimizations are.  It does {\em not}
+indicate the optimization level with which the tool was compiled.  An
+optimization level of zero means that all calls to instrumentation routines are
+treated as standard clean calls, requiring a full context switch.
+
+\begin{figure}
+\includegraphics[width=6in]{perf_charts/inscount_all.pdf}
+\caption{Instruction count performance at various optimization levels.}
+\label{fig:inscount_all}
+\end{figure}
+
+The first configuration, {\tt inscount\_opt0}, is a version of instruction count
+that inserts a clean call at every instruction to increment a 64-bit counter.
+This configuration represents the most na\"ive tool writer possible, who is not
+sensitive to performance, and simply wants to write a tool.
+
+The second configuration, {\tt inscount\_opt0\_bb}, represents a more reasonable
+tool writer, who counts the number of instructions in a basic block, and passes
+them as an immediate integer parameter to a clean call which increments the
+counter by that amount.  This configuration is also run at optimization level
+zero, so all calls are unoptimized and fully expanded.  This configuration is
+representative of a tool writer who does not wish to generate custom assembly,
+but is taking steps to not leave easy performance gains on the table.
+
+The third configuration, {\tt inscount\_opt3}, is the same as the first
+configuration with all optimizations enabled.  Our chart shows a dramatic
+improvement, but we are still performing an extra stack switch to do a very
+small amount of work.  The following configuration, {\tt inscount\_opt3\_tls},
+is again the same, except instead of switching stacks, thread-local scratch
+space is used, as discussed in Section \ref{sec:tls_scratch}.
+
+The final configuration, {\tt inscount\_manual}, is the same tool written using
+custom assembly instrumentation.  This is what we would expect a smart,
+performance-conscious tool author to write.  As shown in Figure
+\ref{fig:inscount_no0}, {\tt inscount\_opt3\_tls} is quite comparable to {\tt
+inscount\_manual}, meaning that for this tool, we are nearly reaching the
+performance of custom assembly.  On average, the automatically optimized
+instruction count tool is achieving 2.0 times slowdown from native, while the
+manual instrumentation achieves on average 1.9 times slowdown.
+
+\begin{figure}
+\includegraphics[width=6in]{perf_charts/inscount_no0.pdf}
+\caption{Instruction count performance of the optimized configurations for
+easier comparison.}
+\label{fig:inscount_no0}
+\end{figure}
+
+Finally, we show the speedup that optimization produces over the na\"ive tool in
+Figure \ref{fig:inscount_speedup}.  On average, {\tt inscount\_opt3\_tls} is
+47.6 times faster than {\tt inscount\_opt0} and 7.8 times faster than {\tt
+inscount\_opt0\_bb}.
+
+\begin{figure}
+\includegraphics[width=6in]{perf_charts/inscount_speedup.pdf}
+\caption{Speedup over {\tt inscount\_opt0} and {\tt inscount\_opt0\_bb} after
+enabling all optimizations.}
+\label{fig:inscount_speedup}
+\end{figure}
+
+\section{Alignment}
+
+Our alignment tool benchmarks are mainly showcasing the performance improvements
+from using partial inlining.  The instrumentation routine starts by checking
+that the access is aligned, and if it is not, it issues a diagnostic.  Issuing a
+diagnostic is a complicated operation, and for the SPEC benchmarks, happens
+infrequently.  Therefore, we inline the common case, which does no more work
+than an alignment check and updating a counter of all memory accesses, and leave
+the diagnostic code out of line.  As shown in Figure
+\ref{fig:alignment_slowdown}, on average we have a 43.8x slowdown before
+applying partial inlining, and a 11.9x slowdown after turning on our
+optimizations.  This means we are achieving on average a 3.7x speedup with our
+partial inlining optimizations.  Speedup is broken down by benchmark in Figure
+\ref{fig:alignment_speedup}.
+
+%One of the interesting aspects of this tool is that different benchmarks have
+%different percentages of aligned memory accesses.
+
+% TODO: discuss interesting benchmark behavior?
+
+\begin{figure}
+\includegraphics[width=6in]{perf_charts/alignment_slowdown.pdf}
+\caption{Memory alignment tool slowdown from native execution.}
+\label{fig:alignment_slowdown}
+\end{figure}
+
+\begin{figure}
+\includegraphics[width=6in]{perf_charts/alignment_speedup.pdf}
+\caption{Memory alignment tool speedup when optimizations are enabled.}
+\label{fig:alignment_speedup}
+\end{figure}
+
+\section{Memory Trace}
+
+The memory trace tool fills a buffer with information about all the memory
+accesses in a program.  Specifically, it tracks the effective address of the
+access, the program counter of the instruction, the size of the access, and
+whether the access was a read or a write.  All information is written to the
+last free element of the buffer, and a check is performed to determine if the
+buffer is full.  The buffer is 1024 elements in size, meaning the buffer needs
+to be processed very infrequently, making this a suitable case for partial
+inlining.  In Figure \ref{fig:memtrace_slowdown}, we show the slowdowns from
+native execution speed with and without optimizations.  In Figure
+\ref{fig:memtrace_speedup}, we show the speedup achieved with turning on
+optimizations.  On average, the tool has a 53x slowdown without optimizations,
+and a 27.4x slowdown with optimizations.  This represents a 1.9x speedup when
+turning on optimizations.
+
+\begin{figure}
+\includegraphics[width=6in]{perf_charts/memtrace_slowdown.pdf}
+\caption{Memory trace tool slowdown from native execution.}
+\label{fig:memtrace_slowdown}
+\end{figure}
+
+\begin{figure}
+\includegraphics[width=6in]{perf_charts/memtrace_speedup.pdf}
+\caption{Memory trace tool speedup when optimizations are enabled.}
+\label{fig:memtrace_speedup}
+\end{figure}
