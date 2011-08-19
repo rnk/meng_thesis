@@ -1,0 +1,125 @@
+\chapter{Background}
+\label{sec:background}
+
+% Background on design of DynamoRIO, all relevant considerations.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{DBI Frameworks}
+
+In order to understand this thesis, it is important to understand what a dynamic
+binary instrumentation (DBI) framework provides to a tool writer.
+
+The primary job of a DBI framework is to interpret a native application as it
+executes and provide an abstract representation of the program code that the
+tool can analyze and instrument.  At first, it would seem easier to simply
+disassmble the application in question and insert instrumentation code into it
+statically.  However, for modern applications, this approach simply does not
+work.  First, there are dynamically loaded libraries that the application may be
+linked against.  Some of these are possible to identify, such as {\tt libc} or
+others.  Some, however, may be dynamically loaded via other interfaces such as
+{\tt dlopen} on Linux and {\tt LoadLibrary} on Windows.  These are not possible
+to predict statically, and a static instrumentation tool will not be able to
+observe and instrument these instructions.  Hence, a {\em dynamic} binary
+instrumentation framework is needed to run alongside the application and
+intercept every instruction that the application would have executed were it to
+run natively.
+
+Furthermore, a dynamic framework maintains control even in the face of such
+convoluted techniques as self-modifying code.  As techniques such as embedded
+Just In Time (JIT) compilation become more prevalent, it becomes more important
+to be able to observe such dynamically generated code.  A DBI framework is also
+responsible for providing all of the native operating system interfaces to the
+application just as if the application were running natively.  This can be a
+daunting challenge, as the operating system interface is large, and an
+application can register many points of entry with the operating system such as
+signal handlers.  A good DBI framework, such as DynamoRIO, Pin, or Valgrind,
+will intercept all of these requests and ensure that control is maintained and
+the tool author is able to observe all instructions.
+
+Finally, a DBI framework provides transparency of the framework and the tool to
+the application.  Even if the application uses introspection techniques such as
+stack tracing or listing all the threads in the process, the application will
+not notice the tool or the DBI framework running alongside it.
+
+For all of these reasons, it is highly desireable to build dynamic program
+analysis tools with DBI frameworks.  The goal of this thesis is to make it
+easier to use DBI frameworks to write analysis tools that perform well.  For
+this thesis, we chose to start by modifying DynamoRIO, which we describe in the
+following section.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{DynamoRIO's Execution Model}
+
+When DynamoRIO takes control, it sets up its own execution context, separate
+from that of the application.  DynamoRIO's context consists of a separate stack,
+and a thread-local data structure describing its state.  The application context
+consists of the original application stack along with all of the registers that
+DynamoRIO may clobber while executing its own code.  Once DynamoRIO has switched
+to its own stack, it determines what the next application program counter would
+have been and begins the process of interpretation.
+
+DynamoRIO does not execute the original application instructions.  Instead, it
+interprets the application code one basic block at a time.  For a previously
+unencountered target application PC, it decodes instructions from the first
+instruction until the next control transfer.  If DynamoRIO has loaded a program
+analysis tool, it will present the instructions in the basic block to the tool
+for instrumentation.  After instrumentation, DynamoRIO mangles the terminating
+control transfer instruction to maintain control after the basic block finishes
+executing.  Specifically, control flow instructions are mangled so that they
+jump into DynamoRIO's central dispatch mechanism which will figure out what to
+do next.
+
+Once DynamoRIO and the analysis tool are done modifying the application
+instruction stream, the instructions are encoded into a ``fragment'' in the
+``code cache.'' The code cache is the memory space allocated by DynamoRIO for
+translated application code.  This process is known as ``translation.'' Finally,
+DynamoRIO switches back to the application context and starts executing the new
+fragment.
+
+When the basic block finishes execution, instead of transferring to the original
+application target, it will re-enter the DynamoRIO VM with information about the
+original target application program counter.  If the target application PC is
+not in the code cache yet, DynamoRIO will then repeat the process of translation
+for the next basic block.  After translation, it will return to the application
+context and re-start execution from the freshly translated fragment.
+
+Additionally, as perhaps the most important optimization in DynamoRIO, if the
+control transfer target is direct, the two basic blocks will be ``linked''
+together.  This is accomplished by modifying the terminating control transfer
+instruction from the previous fragment to directly target to the beginning of
+the new fragment.  Other bookkeeping structures are also updated to support
+unlinking of fragments, which is important for supporting self-modifying code.
+As a result, when a code path executes more than once, it will not have to leave
+the application context to look up the fragment for the target PC in the
+DynamoRIO VM.
+
+% TODO: Perhaps some figures?
+
+\section{Transparency}
+\label{sec:transparency}
+
+One of the primary requirements for DynamoRIO and systems like it is that the
+application should run as if it were running on the native OS and hardware.  For
+example, all control flow decisions made by the native application with the same
+inputs should be exactly the same in the emulated execution.  Even a best effort
+should be made to leave the memory layout completely undisturbed, or the native
+execution will be different.  This means that DynamoRIO must also handle corner
+cases like self-modifying code and stack crawlers as if they were running
+natively.  DynamoRIO observes two guidelines to make this possible.
+
+First, leave anything about the application unchanged if possible.  For example,
+DynamoRIO never touches the application stack or even assumes that it is valid.
+This complicates context switching out of the application and back to DynamoRIO,
+which is described in Section \ref{sec:context_switching}.
+
+Second, if it is not possible to leave the application unchanged, pretend that
+it still is.  An example of this is that DynamoRIO needs to protect application
+code from modification in order to maintain code cache consistency.  However,
+the application must not know about these page protections, or it may change
+behavior.  Therefore, DynamoRIO must intercept system calls that query this
+state and emulate them as if the application were running natively.
+
+There are many other transparency concerns that DynamoRIO abstracts away from
+program analysis tool authors which are described at length in the previous
+work.  Our main concern with transparency is the way that it constrains the
+design of context switching, which is important for tool performance.

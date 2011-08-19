@@ -43,22 +43,22 @@ Possible outline:
   - Describe instruction count
   - Clean calls
   - Inlined calls
-  - Coalesced calls
-  - Fold immediate args into adds
-  - Remove register save/restore pairs between calls
+  - Coalesced calls: Remove register save/restore pairs between calls
+  - Use TLS
   - RLE/DSE
   - Avoid aflags
   - Fold leas
-  - Use TLS
 
 - Partial inlining
   - alignment & memtrace: describe structure of common fast path, alude to
     similar technique in our fasttrack race detector.
-  - Clean calls: cost of context switch is more than work done in common case
+  - Decoding the routine in the presence of control flow
   - Handling Fastpath: describe detection of and isolation of fastpath
   - Handling Slowpath: describe expansion of slowpath
   - Handling Side Effects: describe how side effects are deferred in memtrace
     example
+  - Argument materialization
+  - Argument folding (immediates, leas(?))
   - Alternative: Predicate Function: discuss Pin's approach of InsertIfCall +
     InsertThenCall, inline IfCall if possible.  Requires client code
     restructuring, but doesn't suffer from above issues.

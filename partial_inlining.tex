@@ -1,0 +1,367 @@
+\chapter{Partial Inlining}
+\label{sec:partial_inlining}
+
+%%%%% TODO: Integrate into partial inlining examples.
+\section{Complex {\tt lea} Folding}
+\label{sec:complex_lea_folding}
+
+Using the same logic which we use to fold immediates into memory operands, we
+also have logic for combining two memory operands.  It is not clear to me why a
+static compiler is not able to perform the optimizations we perform here, but we
+provide a code sample in Figure \ref{fig:fold_lea} that shows the benefits of
+our folding optimization.  It eliminates the use of {\tt r10} by swapping the
+base and index registers in further memory operands and merging the scale of 8
+into the memory operand.  While our optimized code sequence may be recomputing
+extra values, our benchmarks show this as an improvement because it requires us
+to save one less register.
+
+\begin{figure}
+\begin{verbatim}
+BEFORE FOLDING:
+lea    <rel> 0x000000007221b7a0 -> %r9
+lea    (%rax,%rax,2) -> %rax
+lea    0x00(,%rax,8) -> %r10                    # r10 is now rax * 8
+mov    %rdi -> (%r9,%rax,8)
+mov    %rsi -> 0x08(%r10,%r9,1)                 # r10 is used
+lea    0x10(%r9) -> %rsi
+mov    $0x00000008 -> (%rsi,%rax,8)
+mov    $0x00000001 -> 0x04(%r10,%rsi,1)         # r10 is used
+mov    %r8d -> 0xffffffe0(%r9)
+
+AFTER FOLDING:
+lea    <rel> 0x000000007221b7a0 -> %r9
+lea    (%rax,%rax,2) -> %rax
+mov    %rdi -> (%r9,%rax,8)
+mov    %rsi -> 0x08(%r9,%rax,8)                 # Swap base/index, use scale
+mov    $0x00000008 -> 0x10(%r9,%rax,8)
+mov    $0x00000001 -> 0x14(%r9,%rax,8)          # Swap base/index, use scale
+mov    %r8d -> 0xffffffe0(%r9)
+\end{verbatim}
+\caption{Memory trace buffer filling routine before and after folding {\tt lea}
+into memory operands.}
+\label{fig:fold_lea}
+\end{figure}
+
+
+%%%%% TODO: integrate into partial inlining chapter.
+\subsection{Argument Materialization}
+
+Arguments to instrumentation calls in DynamoRIO are specified as x86 instruction
+operands evaluated in the application context.  However, we can only materialize
+arguments after we have switched to the DynamoRIO execution context, or we will
+clobber the destination register of the argument.  This creates a chicken and
+egg problem, because the argument may, for example, reference the stack pointer,
+which is clobbered.  However, we cannot evaluate the operand before we switch
+stacks.  Therefore, we must generate additional code to evaluate the operands.
+
+For immediate integers and pointers, there is no complication.  We simply use a
+{\tt mov} instruction to materialize the value in the argument register.
+
+For register operands, if they were unused by the routine, they will not have
+been saved to the stack.  Therefore, the application value is still live, so we
+perform a simple register-to-register {\tt mov}.  If the value was used in the
+inline code, we will have already saved it, so we load it back from the stack.
+This works for materializing registers that have already been clobbered by
+argument materialization, because we will only materialize an argument in a
+register if that register is used inline.  For example, on Linux x86\_64, if we
+have already clobbered {\tt rdi} for the first argument, and the second argument
+is {\tt rdi}, we emit a load from the stack slot for {\tt rdi} into {\tt rsi}.
+Finally, if the register is {\tt rsp}, we have a special case.  The application
+stack pointer is saved in the TLS scratch space, so we must restore it from
+there.
+
+X86 memory operands complicate matters, because they may use two registers for
+the base and index.  Also, a memory operand may have a size, meaning the
+argument should be the value loaded from that address, or it may be unsized,
+implying that the argument should be the effective address of the memory
+operand.  Depending which is requested, we use a load or a {\tt lea}
+instruction.  Similar to the register operand case, we need to need to
+materialize the registers used by the operand before we can materialize the
+argument.  We also cannot use the original registers of the operand, because
+they may now contain materialized arguments.  Therefore, we load the base into
+the destination register for the argument, because we know it will be dead after
+the load or address computation.  We then modify the base register of the memory
+operand to be the destination register.  If the index has been clobbered, then
+we need a second dead register.  We hard code the choice of {\tt rax} for
+holding the index register because there are no calling conventions that
+DynamoRIO supports that use {\tt rax} as a register parameter, and it is often
+already saved due to being used in the inline code sequence.  If it is not
+already saved, it will be marked for saving later when we re-analyze the code
+sequence with argument materialization.
+
+For a complete example, if the argument is the effective address of the memory
+operand {\tt 0x44(\%rsp, \%rdi, 4)}, the we emit the code in Figure
+\ref{fig:arg_mat_lea}.
+
+\begin{figure}
+\begin{verbatim}
+mov    %gs:0x00 -> %rdi                 # Load app rsp into rdi.
+mov    0x10(%rsp) -> %rax               # Load app rdi into rax.
+lea    0x44(%rdi,%rax,4) -> %rdi        # Compute effective address into rdi.
+\end{verbatim}
+\caption{Materializing {\tt 0x44(\%rsp, \%rdi, 4)} into {\tt rdi}.}
+\label{fig:arg_mat_lea}
+\end{figure}
+
+%%%%% TODO: integrate into partial inlining chapter.
+\section{Decoding}
+\label{sec:decoding}
+
+When a tool inserts a clean call, all it provides is a list of machine operand
+arguments and a function pointer to call.  Given a function pointer, it is
+challenging to reliably decode the function itself and determine where it ends.
+
+The na\"ive approach of scanning forward from the function entry to the first
+{\tt ret} instruction breaks down quickly if we want to handle control flow.
+Partial inlining, discussed in Chapter \ref{sec:partial_inlining}, requires
+this, so our decoding algorithm has to handle control flow past the first {\tt
+ret} instruction.
+
+Our decoding algorithm simply remembers the furthest forward branch target, and
+decodes up until at least that address.  Once we have passed that address, we
+continue decoding until we reach a {\tt ret}, a backwards branch, or a probable
+tail call.  Our heuristic for identifying tail calls is to check if the target
+address is not between the entry address and the entry plus 4096.
+
+After decoding, we rewrite all the branches to use labels inserted in the
+instruction list instead of raw PC values.  This allows us to follow a branch to
+a later point in the stream during optimization.
+
+With the instruction list in hand, we proceed to inlining.
+
+
+\section{Partial Inlining}
+\label{sec:partial_inlining}
+
+The major contribution of this thesis is the ability to profitably inline
+instrumentation routines that perform conditional program analysis without
+requiring invasive changes to the analysis tool.  Many common instrumentation
+tools need to instrument many instructions, but often they are only interested
+in the execution of a handful of instructions.  For example, a race detector
+cannot predict which instructions will perform racing memory accesses, so it
+must instrument all memory accesses.  At every access, it performs checks to
+detect if a race occurred.  In order to achieve good performance, the check be
+as efficient as possible.  The vast majority of accesses are non-racing, so they
+must be discarded quickly with a fast path.  Many tools are structured this way,
+and our framework seeks to exploit this structure to improve performance.  Below
+is a list of tools that can potentially benefit from this optimization.
+
+\begin{enumerate}
+\item A race detector has a fast path for non-racing accesses.
+\item A memory debugger will have a fast path assuming that all reads are from
+initialized memory.
+\item A memory alignment tool is not interested in unaligned memory accesses.
+\item A memory trace tool fills a buffer during execution, and most of the time
+the buffer will not yet be full, so insertion is fast.
+\end{enumerate}
+
+Before we can analyze an instrumentation routine to see if partial inlining
+applies, we first need to be able to reliably decode it, as described in Section
+\ref{sec:decoding}.  Robust decoding is much more important when attempting
+partial inlining, because the routine may be much larger and more complicated
+than an unconditional routine with no control flow.
+
+Once we have the full routine instruction stream, we scan from the entry point
+to the first control flow instruction.  If it is a conditional branch, we scan
+forward from both branch targets: the fall-through target and the branch taken
+target.  If the first control flow instruction is a {\tt ret} instruction, we
+say that path is a ``fastpath.''  If both paths are fast, we do not perform
+partial inlining, and continue to inline as normal.  If neither path is fast, we
+abandon partial inlining, and most likely will fail to inline the routine at
+all.
+
+If one path is fast and the other is not, we designate the other path the
+``slowpath.''  We then delete all instructions that do not flow directly from
+the entry to the conditional branch and then to the fastpath.  In place of the
+slowpath, we insert a synthetic call instruction which we will expand later, and
+a jump to the {\tt ret} instruction on the fastpath.
+
+Ideally, when the slowpath executes, we would like to set up the stack frame and
+registers exactly as they would be had we been executing a clean call up until
+the conditional branch.  This, however, is a monumentally challenging task.
+Therefore, we instead perform a regular clean call to the beginning of the
+routine.  However, this creates a problem if the entry path has side effects.
+If this is the case, they will be executed twice, once during the inline
+sequence, and again when we call the routine from the beginning.  Our solution
+to this problem is to identify all instructions with side effects and attempt to
+defer them until after the check executes.
+
+To identify global side effects, we simply test if the instruction in question
+writes non-stack memory.  We identify a non-stack write as anything writing to
+global variables or to memory addressed through any non-stack pointer register.
+
+Next, we attempt to defer the side effects until after the conditional branch.
+This can be tricky, because the conditional branch may depend on memory reads
+which depend on memory writes that we want to defer.  Detecting these cases is
+tricky and requires use of our register liveness analysis described in Section
+\ref{sec:liveness}.  Our algorithm starts at the conditional branch, and goes
+backwards towards the entry point deferring all instructions which can be moved
+past the branch.  An instruction can be moved past the branch if:
+
+\begin{enumerate}
+\item Its result is unused by the conditional branch, meaning our analysis
+starting from the branch considers it dead.
+\item It does not use any registers clobbered by the branch or its dependent
+instructions, meaning the instructions which could not be deferred.
+\end{enumerate}
+
+Figure \ref{fig:memtrace_defer} shows the instruction stream of our memory trace
+tool routine before and after deferring side effects.
+
+\begin{figure}
+\begin{verbatim}
+BEFORE DEFER:
+mov    <rel> 0x000000007221b7a0 -> %r8d 
+lea    <rel> 0x000000007221b7c0 -> %r9 
+mov    %r8d -> %eax 
+add    $0x00000001 %r8d -> %r8d 
+lea    (%rax,%rax,2) -> %rax 
+cmp    %r8d $0x000003ff 
+lea    0x00(,%rax,8) -> %r10 
+mov    %rdi -> (%r9,%rax,8)                           # Write
+mov    %rsi -> 0x08(%r10,%r9,1)                       # Write
+lea    <rel> 0x000000007221b7d0 -> %rsi 
+mov    %edx -> (%rsi,%rax,8)                          # Write
+mov    %ecx -> 0x04(%r10,%rsi,1)                      # Write
+mov    %r8d -> <rel> 0x000000007221b7a0               # Write
+jbe    $0x0000000041341560                            # Cond branch
+ret    %rsp (%rsp) -> %rsp 
+
+AFTER DEFER:
+mov    <rel> 0x000000007221b7a0 -> %r8d 
+mov    %r8d -> %eax 
+add    $0x00000001 %r8d -> %r8d 
+cmp    %r8d $0x000003ff 
+jbe    $0x0000000041341560                            # Cond branch
+lea    <rel> 0x000000007221b7c0 -> %r9 
+lea    (%rax,%rax,2) -> %rax 
+lea    0x00(,%rax,8) -> %r10 
+mov    %rdi -> (%r9,%rax,8)                           # Write
+mov    %rsi -> 0x08(%r10,%r9,1)                       # Write
+lea    <rel> 0x000000007221b7d0 -> %rsi 
+mov    %edx -> (%rsi,%rax,8)                          # Write
+mov    %ecx -> 0x04(%r10,%rsi,1)                      # Write
+mov    %r8d -> <rel> 0x000000007221b7a0               # Write
+ret    %rsp (%rsp) -> %rsp 
+\end{verbatim}
+\caption{Memory trace buffer filling routine before and after deferring side
+effects.}
+\label{fig:memtrace_defer}
+\end{figure}
+
+If we are unable to defer side effects until after the branch, we abandon
+partial inlining and leave the instruction stream unmodified.
+
+One of the unfortunate aspects of clean calls is that they greatly disturb code
+layout.  On Linux x86\_64, a single clean call expands to at least 75
+instructions and 542 bytes.  Emitting this much code at every slowpath site
+would greatly increase our code size and lower the hit rate of the instruction
+cache.  Therefore, we emit the slowpath transition code in a code cache
+maintained on the side.  The slowpath code then consists of rematerializing
+arguments and making a call to the shared transition code.
+
+The transition code is similar to that of a clean call, except it must not save
+registers that were already saved inline.  Registers that were saved inline
+likely no longer contain the original application value.  Therefore, it inverts
+the set of registers that were saved inline and saves those.
+
+With this approach, we have been able to successfully partially inline two
+sample clients we constructed: an alignment checking tool, and a memory trace
+tool.
+
+% TODO Discuss alternative designs, ala Pin?  Or put in contributions?
+% TODO Discuss performance?
+
+\section{Optimization}
+
+In order to make inlining profitable, we discovered that it was important to
+apply traditional compiler optimization techniques to the code sequence we
+wished to inline.
+
+Traditional compiler analysis is performed on a control flow graph using a
+representation of basic blocks, which are single-entry single-exit lists of
+instructions.  Optimization is usually done with the help of abstract
+interpretation and control-sensitive data flow analyses.  Rather than
+introducing an entire compiler middle to back end into DynamoRIO, we focus on
+optimizing a single basic block in the absence of control flow.  This is a much
+more tractable problem.
+
+At one point, we were considering basing our analyses and transformations on the
+LLVM\cite{llvm} framework, but this approach was passed over due to performance
+concerns and complications of integrating with such a large C++ project.
+
+% TODO Compare to post-link machine code optimization techniques?
+
+\subsection{Liveness Analysis}
+\label{sec:liveness}
+
+The basis for most of our transformations is register liveness analysis.  This
+is a standard dataflow analysis, starting at the end of the instruction stream,
+and stepping backwards, maintaining a set of live and dead registers based on
+which registers instructions read from.  We also model the liveness of various
+bits of the x86 flags register, so we can know if a {\tt cmp} or {\tt add}
+instruction is needed by a branch or {\tt addc} instruction.
+
+\subsection{Live Range Rewriting}
+
+The operation that we perform perhaps the most is rewriting a live range defined
+by a register, its definition, and its final use.  For example, if we have an
+instruction which produces a value in a register, we may have identified a way
+of folding the other source operand into the future uses of the register.  We
+need a general way of visiting all uses of the register in the live range and
+updating the instructions which use it.  Our live range rewriting facility
+provides this.
+
+\subsection{Dead Code Elimination}
+
+Flowing immediately from having a register liveness analysis, we can immediately
+use that analysis to delete dead instructions.  Dead instructions arise often
+when performing partial inlining, because code that may have used a register
+previously may now be deleted, rendering the instruction dead.
+
+We have to apply the usual precautions of not deleting instructions which have
+purposes besides using the result, such as control flow instructions, memory
+writes, and labels.
+
+\subsection{Copy Propagation}
+
+Again, from liveness information, we can detect when it is profitable to
+eliminate unnecessary copies.  If the source register is dead and the
+destination of a copy is used, we can simply replace the live range of the
+destination with the source, so long as the source is not clobbered before all
+uses of the destination.
+
+\subsection{Register Reuse}
+
+In order to avoid instruction anti-dependencies, compilers try to use different
+registers and schedule instructions so that computations can be performed in
+separate registers in parallel.  However, when performing instrumentation,
+avoiding the use of a single register pays many dividends because it avoids
+saving and restoring that register, which are an extra two memory instructions.
+Also, on super-scalar architectures which support register
+renaming\cite{reg_renaming}, anti-dependencies are less of a performance
+problem.  Therefore, the goal of this transform is to make the code use as few
+registers as possible.  We search for instructions which define registers that
+were previously unused by any other instruction, and test if there are any dead,
+but already used registers.  If this is the case, we attempt to rewrite the live
+range of this register to use a different register.  If this succeeds, we have
+reduced the register pressure created by the inline code sequence.
+
+\subsection{Folding Immediates}
+
+Perhaps the most classic and trivial optimization that compilers generally
+perform is constant folding.  Although this is more easily done with a tree or
+SSA representation, at the machine code level, we do this by searching for
+instructions which materialize immediate values into registers, and then proceed
+to use the register.  When we find such a materialization, we check if we can
+rewrite the uses of the register to use an immediate instead.
+
+The most obvious use case for this is a tool like instruction count.  In this
+situation, we wish to call a routine after every basic block with a single
+integer argument and add that to a global variable.  Using this optimization, we
+are able to fold the argument materialization into the add, so the routine ends
+up not requiring any scratch registers.
+
+We also have logic for folding an immediate into a complex x86 memory operand,
+so offsets which are passed as constant integer arguments to instrumentation
+routines can be folded into the memory access.

@@ -1,0 +1,517 @@
+\chapter{Inlining}
+\label{sec:inlining}
+
+\section{Instruction Count Tool}
+
+The first tool we examine in this thesis is instruction count.  The goal of this
+tool is to compute the exact number of instructions that would be executed by
+the application if we were to run it natively.  The simplest way of achieving
+this goal is to iterate across each instruction and insert a call to a routine
+which increments a 64-bit counter before executing the routine.  A fragment of
+the source code for this tool is shown in Figure \ref{fig:naive_inscount}.
+
+\begin{figure}
+\begin{verbatim}
+#include "dr_api.h"
+#include "dr_calls.h"
+
+/* ... */
+
+static void inc_count(void) {
+    global_count++;
+}
+
+dr_emit_flags_t
+event_basic_block(void *drcontext, void *tag, instrlist_t *bb,
+                  bool for_trace, bool translating) {
+    instr_t *instr;
+    for (instr = instrlist_first(bb); instr != NULL;
+         instr = instr_get_next(instr))
+        drcalls_insert_call(drcontext, bb, instr, (void *)inc_count,
+                            false /* save fpstate */, 0);
+    /* ... */
+}
+\end{verbatim}
+\caption{Abbreviated source code sample for our instruction count tool.}
+\label{fig:naive_inscount}
+\end{figure}
+
+Instruction count is a simple example, and it would be fair to suggest that in
+this case a reasonable tool author would be able to optimize this to a single
+instrumentation routine call in each basic block.  However, we believe that for
+more complicated tools, this is not easy, and inserting many calls to
+instrumentation routines around the instructions they pertain to is the simple
+and expected way to write the tool.  For example, for a tool like {\tt
+opcodemix}, which reports the distribution of x86 instruction opcodes executed,
+the simple way to implement this tool is to insert a call before each
+instruction which takes as a parameter the opcode for which a counter should be
+incremented.  We expect that all optimizations applying to our sample
+instruction count tool would be just as effective for {\tt opcodemix} as well as
+other similar tools.
+
+\section{Clean Calls}
+\label{sec:clean_calls}
+
+Implemented with the standard clean call infrastructure that DynamoRIO provides,
+this simple tool creates large fragments of code that perform poorly.  Figure
+\ref{fig:clean_call} shows an x86\_64 assembly listing of a clean call.
+
+\begin{figure}
+\begin{verbatim}
+mov    %rsp -> %gs:0x00                                 # Switch to dstack
+mov    %gs:0x20 -> %rsp
+mov    0x000002c0(%rsp) -> %rsp
+lea    0xfffffd50(%rsp) -> %rsp                         # Allocate frame
+mov    %rax -> 0x48(%rsp)                               # Save GPRs
+... save rbx-r14 ...
+mov    %r15 -> 0x00000088(%rsp)
+lahf   -> %ah
+seto   -> %al
+mov    %rax -> 0x00000090(%rsp)                         # Save "aflags"
+movdqa %xmm0 -> 0x000000b0(%rsp)                        # Save XMM regs
+... save xmm1-xmm14 ...
+movdqa %xmm15 -> 0x00000290(%rsp)
+call   $0x004041c0 %rsp -> %rsp 0xfffffff8(%rsp)        # Call inc_count
+movdqa 0x000000b0(%rsp) -> %xmm0                        # Restore XMM regs
+... restore xmm1-xmm14 ...
+movdqa 0x00000290(%rsp) -> %xmm15
+mov    0x00000090(%rsp) -> %rax                         # Restore "aflags"
+add    $0x7f %al -> %al
+sahf   %ah
+mov    0x48(%rsp) -> %rax                               # Restore GPRs
+... restore rbx-r14 ...
+mov    0x00000088(%rsp) -> %r15
+mov    %gs:0x00 -> %rsp                                 # Restore appstack
+\end{verbatim}
+\caption{Assembly listing for a single clean call.}
+\label{fig:clean_call}
+\end{figure}
+
+Although all we want to do is increment a counter, we end up doing all of the
+following work in order to support as much arbitrary C code as possible:
+
+\begin{enumerate}
+\item Switch to a clean stack.
+\item Save all registers.
+\item Save the flags register.
+\item Save ``volatile'' XMM registers.
+\item Materialize arguments into parameter registers.  Not shown above, since
+inc\_count takes no arguments.
+\item Call tool routine.
+\item Restore ``volatile'' XMM registers.
+\item Restore the flags register.
+\item Restore all registers.
+\item Switch back to the application stack.
+\end{enumerate}
+
+Saving the XMM registers seems excessive for a short snippet of C code, but even
+if the tool is avoiding the use of floating point instructions, it is still
+possible for the compiler to choose to use XMM registers.  More likely, however,
+is that the tool may call {\tt memcpy}.  In recent versions of glibc, {\tt
+memcpy} will make use of the XMM registers to widen the load and store width,
+which will clobber the caller-saved XMM registers.  Therefore DynamoRIO must
+conservatively save this set of registers, even though they are most likely
+unused.
+
+To avoid doing all this extra work of context switching, we want find a way to
+{\em inline} the instrumentation routine into the application code stream.
+
+\section{Simple Inlining}
+
+For inlining routines that have no control flow, the process is simple.  The
+tool provides us with a function pointer which is the PC of the first
+instruction in the routine.  We start decoding instructions from this PC until
+we find the first {\tt ret} instruction.  Assuming the routine has no control
+flow, this is adequate for reliably decoding the routine.  When we extended our
+inliner to perform partial inlining we had to augment our decoding algorithm as
+described in Section \ref{sec:decoding_with_control_flow}.
+% TODO: Add this section and label.
+
+Inlining is only possible if we are able to analyze the callee and only if the
+analysis suggests that doing so would be profitable.  The analysis is designed
+so that if there are any corner cases that the analysis cannot handle reliably,
+it can fail, and inlining will fail.  For example, if the stack pointer is
+dynamically updated in the middle of the function, this inhibits stack usage
+analysis.  Therefore we bail out in such cases.  Assuming our analysis is
+successful, we only inline if the following criteria apply:
+
+\begin{itemize}
+\item The callee is a leaf function.  Our definition of leaf function is
+conservative, meaning it must not have any calls, trapping instructions,
+indirect branches, or direct branches outside of the function.
+\item The simplified callee instruction stream is no more than 20 instructions.
+\item The callee does not use XMM registers.
+\item The callee does not use more than a fixed number of general purpose
+registers.  We have not picked an appropriate limit yet.
+\item The callee must have a simple stack frame that uses at most one stack
+location.
+\item The callee may only have as many arguments as can be passed in registers
+on the current platform, or only one if the native calling convention does not
+support register parameters.
+\end{itemize}
+
+If the routine meets the above criteria, we can then simplify the clean call
+process described in Section \ref{sec:clean_calls} down to the following steps:
+
+\begin{enumerate}
+\item Switch to a clean stack.
+\item Save clobbered registers.
+\item Save the flags register if used.
+\item Materialize arguments into parameter registers.
+\item Emit the simplified inline code stream.
+\item Restore the flags register if used.
+\item Restore clobbered registers.
+\item Switch back to the application stack.
+\end{enumerate}
+
+In particular, we skip all XMM saves and most of the register saves, especially
+on x86\_64 which has more registers than most callees use.
+
+For our instruction count tool, the disassmbled {\tt inc\_count} routine is
+shown in its original form in Figure \ref{fig:inc_count_asm} and after inlining
+in Figure \ref{fig:inscount_inlined}.  Note how all the stack frame setup and
+teardown related instructions from the original routine have been removed in the
+inlined version, and been replaced with our own stack management.
+
+\begin{figure}
+\begin{verbatim}
+push   %rbp %rsp -> %rsp 0xfffffff8(%rsp)       # Frame setup
+mov    %rsp -> %rbp 
+mov    <rel> 0x00000000006189e0 -> %rax         # Load global_count
+add    $0x0000000000000001 %rax -> %rax         # Increment
+mov    %rax -> <rel> 0x00000000006189e0         # Store global_count
+leave  %rbp %rsp (%rbp) -> %rsp %rbp            # Frame teardown
+ret    %rsp (%rsp) -> %rsp                      # ret
+\end{verbatim}
+\caption{Assembly for the {\tt inc\_count} instrumentation routine.}
+\label{fig:inc_count_asm}
+\end{figure}
+
+\begin{figure}
+\begin{verbatim}
+mov    %rsp -> %gs:0x00                         # Switch to dstack
+mov    %gs:0x20 -> %rsp 
+mov    0x000002c0(%rsp) -> %rsp 
+lea    0xfffffd50(%rsp) -> %rsp                 # Create frame
+mov    %rax -> 0x48(%rsp)                       # Save %rax, only used reg
+lahf   -> %ah                                   # Save aflags
+seto   -> %al 
+mov    %rax -> 0x00000090(%rsp) 
+mov    <rel> 0x00000000006189e0 -> %rax         # Inlined increment code
+add    $0x0000000000000001 %rax -> %rax 
+mov    %rax -> <rel> 0x00000000006189e0 
+mov    0x00000090(%rsp) -> %rax                 # Restore aflags
+add    $0x7f %al -> %al 
+sahf   %ah 
+mov    0x48(%rsp) -> %rax                       # Restore %rax
+mov    %gs:0x00 -> %rsp                         # Back to appstack
+mov    (%rbx) -> %rax                           # APPLICATION INSTRUCTION
+... Process repeats for each application instruction
+\end{verbatim}
+\caption{{\tt inc\_count} inlined into an application basic block without
+further optimization.}
+\label{fig:inscount_inlined}
+\end{figure}
+
+The inlined version of the code is clearly an improvement over the clean call
+version of the code, but it also has much room for improvement.  Still the cost
+of switching contexts to the DynamoRIO stack to save registers dwarfs the cost
+of the actual code we wish to execute.  The most straightforward way to avoid
+this cost is to coalesce multiple calls together.  By grouping inlined calls
+together, we only have one context switch pair for each basic block instead of
+one for each instruction.
+
+\section{Call Coalescing}
+
+In order to do coalescing, we need visibility of the entire instrumented basic
+block.  Therefore we choose to represent calls to instrumentation routines as
+artifical pseudo-instructions that are expanded after instrumentation.
+
+Before expanding each call, we see if it is possible to group them together
+within the basic block.  If the call has register arguments, we avoid moving it
+outside the live range of its register arguments or past any memory writes.
+This approach works well for instruction count and other tools that pass
+immediate values to instrumentation routines, because we have total freedom as
+to how they are scheduled.
+
+Once the calls are scheduled, we expand them to another level of pseudo-ops of
+stack switches and register saves and register restores.  Before lowering these
+pseudo-ops, we pass over the instruction stream to delete consecutive reciprocal
+operations.  Currently we identify three pairs of operations as being
+reciprocal: switching to dstack and back, restoring and saving a register, and
+restoring and saving flags.  Coalescing all calls in a three instruction basic
+block results in the code in Figure \ref{fig:inscount_coalesced}.
+
+\begin{figure}
+\begin{verbatim}
+mov    %rsp -> %gs:0x00                         # Switch to dstack
+mov    %gs:0x20 -> %rsp 
+mov    0x000002c0(%rsp) -> %rsp 
+lea    0xfffffd50(%rsp) -> %rsp                 # Setup frame
+mov    %rax -> 0x48(%rsp)                       # Save %rax
+lahf   -> %ah                                   # Save flags
+seto   -> %al 
+mov    %rax -> 0x00000090(%rsp) 
+mov    <rel> 0x0000000000618c80 -> %rax         # Call 1
+add    $0x0000000000000001 %rax -> %rax 
+mov    %rax -> <rel> 0x0000000000618c80 
+mov    <rel> 0x0000000000618c80 -> %rax         # Call 2
+add    $0x0000000000000001 %rax -> %rax 
+mov    %rax -> <rel> 0x0000000000618c80 
+mov    <rel> 0x0000000000618c80 -> %rax         # Call 3
+add    $0x0000000000000001 %rax -> %rax 
+mov    %rax -> <rel> 0x0000000000618c80 
+mov    0x00000090(%rsp) -> %rax                 # Restore flags
+add    $0x7f %al -> %al 
+sahf   %ah 
+mov    0x48(%rsp) -> %rax                       # Restore %rax
+mov    %gs:0x00 -> %rsp                         # Restore appstack
+... three application instructions
+\end{verbatim}
+\caption{Three inlined calls to {\tt inc\_count} coalesced together.}
+\label{fig:inscount_coalesced}
+\end{figure}
+
+However, we still spend an entire four instructions setting up a stack frame
+just so that we can save {\tt \%rax} and the flags register.  We describe how we
+can avoid switching stacks altogether in the next section.
+
+\section{Avoiding Stack Switching with TLS}
+\label{sec:tls_scratch}
+
+The original reason for switching stacks is that we cannot rely on being able to
+use the stack used by the application.  There are many reasons why this might be
+the case.  The application might be using the red zone on Linux x86\_64, which
+is an area past the end of the stack usable by leaf functions.  The application
+might be close to the guard page which will grow the stack.  The application
+might have a dangling pointer to the stack and we may want to find that bug.
+Finally, the application might be running without a stack and just using {\tt
+\%rsp} as a general purpose register.  In any case, it is important to assume
+nothing about the application stack.
+
+Our main use for the stack when inlining code is as temporary scratch space
+where we can save registers that are clobbered.  For single-threaded
+applications we can simply use global variables, but this breaks down quickly if
+we want to share the code cache between threads.  In order to have per-thread
+global variables, we need to use ``thread local storage,'' or TlS.  On Windows
+and Linux the x86 {\tt fs} and {\tt gs} segment registers are used to point to a
+memory region unique for each thread.  On Linux, only one segment is used, so we
+claim the other and use it for our own TLS memory region.  On Windows, however,
+the operating system will not preserve our segment register value across
+interrupts, so we cannot set our own.  Instead, we steal TLS space from the
+application by introspecting on the application's thread execution block (TEB)
+and marking our storage as allocated.\cite{inside_win2k}  DynamoRIO uses a small
+amount of this space internally, and we cannot afford to allocate too much or we
+will interfere with the execution of the application.  Therefore we do not
+enable this optimization by default.  Finally, if we wish to perform partial
+inlining as described in Chapter \ref{sec:partial_inlining}, we cannot yet
+transfer from the inline code to the slowpath without an existing stack frame.
+
+Figure \ref{fig:inscount_tls} shows the instruction count example code from the
+previous section with the TLS scratch space optimization turned on.  Note that
+it does not need any stack frame setup, and simply saves registers and flags
+into TLS slots.
+
+\begin{figure}
+\begin{verbatim}
+mov    %rax -> %gs:0x00000088                   # Save %rax
+lahf   -> %ah                                   # Save flags
+seto   -> %al 
+mov    %rax -> %gs:0x00000090 
+mov    <rel> 0x0000000000619780 -> %rax         # Call 1
+add    $0x0000000000000001 %rax -> %rax 
+mov    %rax -> <rel> 0x0000000000619780 
+mov    <rel> 0x0000000000619780 -> %rax         # Call 2
+add    $0x0000000000000001 %rax -> %rax 
+mov    %rax -> <rel> 0x0000000000619780 
+mov    <rel> 0x0000000000619780 -> %rax         # Call 3
+add    $0x0000000000000001 %rax -> %rax 
+mov    %rax -> <rel> 0x0000000000619780 
+mov    %gs:0x00000090 -> %rax                   # Restore flags
+add    $0x7f %al -> %al 
+sahf   %ah 
+mov    %gs:0x00000088 -> %rax                   # Restore %rax
+... three application instructions
+\end{verbatim}
+\caption{Three inlined and coalesced calls to {\tt inc\_count} that use TLS
+instead of dstack.}
+\label{fig:inscount_tls}
+\end{figure}
+
+To address the next source of inefficiency in our instruction counting tool, we
+use some classic compiler optimizations on the inlined code itself to try to
+reduce that, now that it is the bottleneck.
+
+\section{RLE and DSE}
+
+Redundant load elimination (RLE) and dead store elimination (DSE) are classic
+compiler optimizations that we found useful for optimizing tools.  In our last
+example, the inlined code is loading {\tt global\_count}, incrementing it, and
+storing it.  What we would like to see is for it to be loaded once, incremented
+three times in a register, and then stored back to memory.
+
+The logic for our version of RLE is that if there is a store to and a load from
+the same memory operand without any potentially aliasing memory writes between
+them, we can use the source register from the store instead of loading the value
+again.  We have to be careful that the register that was written to the memory
+location is still live by the time the load occurs, and that it is live for all
+uses of the load's destination register.  If that is the case, then we rewrite
+all uses of the load's destination register over its live range to use the
+store's source register.  Figure \ref{fig:inscount_rle} shows the example code
+fragment after applying just RLE.
+
+\begin{figure}
+\begin{verbatim}
+mov    %rax -> %gs:0x00000088                   # Save %rax
+lahf   -> %ah                                   # Save flags
+seto   -> %al 
+mov    %rax -> %gs:0x00000090 
+mov    <rel> 0x0000000000619780 -> %rax         # Load 1
+add    $0x0000000000000001 %rax -> %rax 
+mov    %rax -> <rel> 0x0000000000619780         # Store 1
+add    $0x0000000000000001 %rax -> %rax         # Load 2 is gone
+mov    %rax -> <rel> 0x0000000000619780         # Store 2
+add    $0x0000000000000001 %rax -> %rax         # Load 3 is gone
+mov    %rax -> <rel> 0x0000000000619780         # Store 3
+mov    %gs:0x00000090 -> %rax                   # Restore flags
+add    $0x7f %al -> %al 
+sahf   %ah 
+mov    %gs:0x00000088 -> %rax                   # Restore %rax
+... three application instructions
+\end{verbatim}
+\caption{Three inlined calls to {\tt inc\_count} after applying just RLE.}
+\label{fig:inscount_rle}
+\end{figure}
+
+Dead store elimination is similar, in that if there is a store to memory,
+followed by no potentially aliasing reads from memory, followed by a store to
+the same memory location, we can delete the first store.  Because we do not need
+to rewrite any uses of any registers, this is simpler than RLE.  Figure
+\ref{fig:inscount_rle_dse} shows the application of both.
+
+\begin{figure}
+\begin{verbatim}
+mov    %rax -> %gs:0x00000088                   # Save %rax
+lahf   -> %ah                                   # Save flags
+seto   -> %al 
+mov    %rax -> %gs:0x00000090 
+mov    <rel> 0x0000000000619780 -> %rax         # Load 1
+add    $0x0000000000000001 %rax -> %rax         # Increment 1
+add    $0x0000000000000001 %rax -> %rax         # Increment 2
+add    $0x0000000000000001 %rax -> %rax         # Increment 3
+mov    %rax -> <rel> 0x0000000000619780         # Store 3
+mov    %gs:0x00000090 -> %rax                   # Restore flags
+add    $0x7f %al -> %al 
+sahf   %ah 
+mov    %gs:0x00000088 -> %rax                   # Restore %rax
+... three application instructions
+\end{verbatim}
+\caption{Three inlined calls to {\tt inc\_count} after applying RLE and DSE.}
+\label{fig:inscount_rle_dse}
+\end{figure}
+
+Still, however, our code is not satisfactory.  We are using the {\tt add}
+instruction, which updates the carry, overflow, and other bits in the x86 flags
+register.  We cannot assume that the application is not using these flag bits,
+so we must preserve them, requiring an extra stack slot.  The next section
+describes how to avoid this.
+
+\section{Flags Avoidance}
+
+Many x86 arithmetic instructions modify the x86 flags register.  This is
+problematic, because it means we have to save and restore the bits of the flags
+register that we touch.  This can be done either using the {\tt pushf} and {\tt
+popf} instructions, or a sequence of {\tt lahf}, {\tt seto}, {\tt lahf}, and
+{\tt add}.  The {\tt popd} instruction turns out to be fairly expensive, because
+it sets many complex execution flag like the single-stepping trap flag for
+debuggers.  Also, the {\tt lahf} sequence avoids stack usage, so it is
+preferred.
+
+However, we have the opportunity to transform inlined code to avoid flags usage
+if possible.  Instead of using the {\tt add} instruction to perform additions
+and subtractions, we can use the {\tt lea} instruction.  The {\tt lea}
+instruction was intended to be a ``load effective address'' instruction for
+dealing with things like the complex x86 segmented address space model.  For its
+source, we provide an arbitrary x86 memory operand, for which it computes the
+effective address and stores the result in a destination register.  However, we
+can provide a memory operand which is performing simple additions instead of
+address arithmetic.  Because {\tt lea} is not designed for arithmetic, it does
+not modify flags.
+
+We have a pass which can automatically perform this transformation.  However,
+because {\tt lea} does not support memory operands as destinations, we have to
+introduce a temporary register along with a load and store if the arithmetic
+operation uses a memory operand as a destination.  Our pass attemps to pick a
+register which has already been used by the inlined code so that we do not need
+to introduce any extra saves and restores.
+
+We show the results of applying this pass to our repeated additions in Figure
+\ref{fig:inscount_flags}.  As shown in the listing, this is a big win, because
+it eliminates three instructions on both sides of the call site as well as two
+memory accesses.
+
+\begin{figure}
+\begin{verbatim}
+mov    %rax -> %gs:0x00000088                   # Save %rax
+mov    <rel> 0x0000000000619780 -> %rax         # Load global_count
+lea    0x01(%rax) -> %rax                       # No flags increment
+lea    0x01(%rax) -> %rax                       # No flags increment
+lea    0x01(%rax) -> %rax                       # No flags increment
+mov    %rax -> <rel> 0x0000000000619780         # Store global_count
+mov    %gs:0x00000088 -> %rax 
+... three application instructions
+\end{verbatim}
+\caption{Three inlined calls to {\tt inc\_count} after avoiding aflags usage.}
+\label{fig:inscount_flags}
+\end{figure}
+
+Still, however, it is obvious to a human that this is not as efficient as it
+could be.  We do not need three separate increment instructions.  They can be
+folded together to a single {\tt lea} that adds 3 to {\tt \%rax}.
+
+\section{Simple {\tt lea} Folding}
+
+Using some of the same register liveness analysis tools we developed to support
+our RLE and DSE optimizations, we can do the same for {\tt lea} operations.  If
+one {\tt lea} defines a register used in another {\tt lea}, we can attempt to
+combine the two memory operands.  For simple base and displacement memory
+operands, as in the listing shown in the previous section, this is as simple as
+adding the two displacements together and substituting in the original base
+register.  We discuss more complex cases in Section
+\ref{sec:complex_lea_folding}.  After we apply our instruction folding
+optimizations, we get the assembly listing in Figure \ref{fig:inscount_lea}.
+
+\begin{figure}
+\begin{verbatim}
+mov    %rax -> %gs:0x00000088                   # Save %rax
+mov    <rel> 0x0000000000619780 -> %rax         # Load global_count
+lea    0x03(%rax) -> %rax                       # Add 3
+mov    %rax -> <rel> 0x0000000000619780         # Store global_count
+mov    %gs:0x00000088 -> %rax                   # Restore %rax
+... three application instructions
+\end{verbatim}
+\caption{Three inlined calls to {\tt inc\_count} after avoiding aflags usage.}
+\label{fig:inscount_lea}
+\end{figure}
+
+\section{Chapter Summary}
+
+Using the example of instruction counting, we have shown how our inliner and
+suite of supporting optimizations can drastically improve the performance of
+na\"ive instrumentation tools.  First, we started by looking at how a basic
+clean call is implemented and at how it does more work than is necessary.  We
+moved on to do basic inlining, where we switch stacks, save only the registers
+and flags necessary to execute the routine inline, and execute it.  Using the
+suite of optimizations developed during this thesis, we were able to
+incrementally improve on the code generated in the first example.  For our first
+optimization, using pseudo-instructions, we were able to schedule multiple calls
+together and avoid duplicated work.  Next we avoided the stack switch altogether
+by using thread local storage, which may not always be available.  Regardless,
+we then moved on to look at how redundant load elimination and dead store
+elimination can make a big difference in cleaning up our inlined code.  Finally,
+we finished by looking at the low-level machine specific optimizations for
+avoiding aflags usage and combining multiple arithmetic instructions.
+
+In the next chapter, we look at two new examples of a memory alignment checker
+and a memory trace tool too demonstrate the major contribution of this thesis:
+partial inlining.

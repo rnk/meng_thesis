@@ -48,6 +48,8 @@
 % command for "0th"
 \newcommand{\zeroth}{0$^{\rm th}$}
 
+% Allows \verbatiminput.
+\usepackage{verbatim}
 
 % Define centered expanding width column
 \newcolumntype{C}{>{\centering\arraybackslash}X}
@@ -226,9 +228,11 @@
 
 \input{introduction}
 
-\input{dynamorio}
+\input{background}
 
-\input{optimizations}
+\input{inlining}
+
+\input{partial_inlining}
 
 \input{performance}
 
