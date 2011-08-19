@@ -118,6 +118,15 @@
   \setlength{\parsep}{0pt}
 }{\end{itemize}}
 
+\newenvironment{packed_enumerate}{
+\begin{enumerate}
+  \setlength{\itemsep}{2pt}
+  \setlength{\parskip}{0pt}
+  \setlength{\topsep}{0pt}
+  \setlength{\partopsep}{0pt}
+  \setlength{\parsep}{0pt}
+}{\end{enumerate}}
+
 % Remove citations from ToC, ToF, etc..., Ex: none, works automatically
 \usepackage{notoccite}
 
@@ -158,7 +167,7 @@
 %% on the thesis.
 \degreemonth{September}
 \degreeyear{2011}
-\thesisdate{September XXX, 2010}
+\thesisdate{September 22, 2010}
 
 %% By default, the thesis will be copyrighted to you.  If you need to copyright
 %% the thesis to MIT, just specify the `mitcopyright' documentclass option.  If

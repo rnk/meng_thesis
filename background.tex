@@ -93,33 +93,6 @@ As a result, when a code path executes more than once, it will not have to leave
 the application context to look up the fragment for the target PC in the
 DynamoRIO VM.
 
-% TODO: Perhaps some figures?
-
-\section{Transparency}
-\label{sec:transparency}
-
-One of the primary requirements for DynamoRIO and systems like it is that the
-application should run as if it were running on the native OS and hardware.  For
-example, all control flow decisions made by the native application with the same
-inputs should be exactly the same in the emulated execution.  Even a best effort
-should be made to leave the memory layout completely undisturbed, or the native
-execution will be different.  This means that DynamoRIO must also handle corner
-cases like self-modifying code and stack crawlers as if they were running
-natively.  DynamoRIO observes two guidelines to make this possible.
-
-First, leave anything about the application unchanged if possible.  For example,
-DynamoRIO never touches the application stack or even assumes that it is valid.
-This complicates context switching out of the application and back to DynamoRIO,
-which is described in Section \ref{sec:context_switching}.
-
-Second, if it is not possible to leave the application unchanged, pretend that
-it still is.  An example of this is that DynamoRIO needs to protect application
-code from modification in order to maintain code cache consistency.  However,
-the application must not know about these page protections, or it may change
-behavior.  Therefore, DynamoRIO must intercept system calls that query this
-state and emulate them as if the application were running natively.
-
-There are many other transparency concerns that DynamoRIO abstracts away from
-program analysis tool authors which are described at length in the previous
-work.  Our main concern with transparency is the way that it constrains the
-design of context switching, which is important for tool performance.
+Now that we have presented the motivations and challenges involved with dynamic
+binary instrumentation, we demonstrate how simple inlining and our suite of
+optimizations work together to optimize a na\"ive instruction counting tool.

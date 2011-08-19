@@ -90,7 +90,7 @@ mov    %gs:0x00 -> %rsp                                 # Restore appstack
 Although all we want to do is increment a counter, we end up doing all of the
 following work in order to support as much arbitrary C code as possible:
 
-\begin{enumerate}
+\begin{packed_enumerate}
 \item Switch to a clean stack.
 \item Save all registers.
 \item Save the flags register.
@@ -102,7 +102,7 @@ inc\_count takes no arguments.
 \item Restore the flags register.
 \item Restore all registers.
 \item Switch back to the application stack.
-\end{enumerate}
+\end{packed_enumerate}
 
 Saving the XMM registers seems excessive for a short snippet of C code, but even
 if the tool is avoiding the use of floating point instructions, it is still
@@ -117,6 +117,7 @@ To avoid doing all this extra work of context switching, we want find a way to
 {\em inline} the instrumentation routine into the application code stream.
 
 \section{Simple Inlining}
+\label{sec:simple_inlining}
 
 For inlining routines that have no control flow, the process is simple.  The
 tool provides us with a function pointer which is the PC of the first
@@ -124,8 +125,7 @@ instruction in the routine.  We start decoding instructions from this PC until
 we find the first {\tt ret} instruction.  Assuming the routine has no control
 flow, this is adequate for reliably decoding the routine.  When we extended our
 inliner to perform partial inlining we had to augment our decoding algorithm as
-described in Section \ref{sec:decoding_with_control_flow}.
-% TODO: Add this section and label.
+described in Section \ref{sec:decoding_cti}.
 
 Inlining is only possible if we are able to analyze the callee and only if the
 analysis suggests that doing so would be profitable.  The analysis is designed
@@ -135,7 +135,7 @@ dynamically updated in the middle of the function, this inhibits stack usage
 analysis.  Therefore we bail out in such cases.  Assuming our analysis is
 successful, we only inline if the following criteria apply:
 
-\begin{itemize}
+\begin{packed_itemize}
 \item The callee is a leaf function.  Our definition of leaf function is
 conservative, meaning it must not have any calls, trapping instructions,
 indirect branches, or direct branches outside of the function.
@@ -148,12 +148,12 @@ location.
 \item The callee may only have as many arguments as can be passed in registers
 on the current platform, or only one if the native calling convention does not
 support register parameters.
-\end{itemize}
+\end{packed_itemize}
 
 If the routine meets the above criteria, we can then simplify the clean call
 process described in Section \ref{sec:clean_calls} down to the following steps:
 
-\begin{enumerate}
+\begin{packed_enumerate}
 \item Switch to a clean stack.
 \item Save clobbered registers.
 \item Save the flags register if used.
@@ -162,7 +162,7 @@ process described in Section \ref{sec:clean_calls} down to the following steps:
 \item Restore the flags register if used.
 \item Restore clobbered registers.
 \item Switch back to the application stack.
-\end{enumerate}
+\end{packed_enumerate}
 
 In particular, we skip all XMM saves and most of the register saves, especially
 on x86\_64 which has more registers than most callees use.
@@ -469,7 +469,8 @@ Still, however, it is obvious to a human that this is not as efficient as it
 could be.  We do not need three separate increment instructions.  They can be
 folded together to a single {\tt lea} that adds 3 to {\tt \%rax}.
 
-\section{Simple {\tt lea} Folding}
+\section{Folding {\tt lea} Instructions}
+\label{sec:fold_lea}
 
 Using some of the same register liveness analysis tools we developed to support
 our RLE and DSE optimizations, we can do the same for {\tt lea} operations.  If
@@ -477,9 +478,10 @@ one {\tt lea} defines a register used in another {\tt lea}, we can attempt to
 combine the two memory operands.  For simple base and displacement memory
 operands, as in the listing shown in the previous section, this is as simple as
 adding the two displacements together and substituting in the original base
-register.  We discuss more complex cases in Section
-\ref{sec:complex_lea_folding}.  After we apply our instruction folding
-optimizations, we get the assembly listing in Figure \ref{fig:inscount_lea}.
+register.  We are also able to handle more complex cases involving two memory
+operands both of which have a base, displacement, index, and scale.  After we
+apply our instruction folding optimizations to the example at hand, we get the
+assembly listing in Figure \ref{fig:inscount_lea}.
 
 \begin{figure}
 \begin{verbatim}

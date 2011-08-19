@@ -52,21 +52,26 @@ Possible outline:
 - Partial inlining
   - alignment & memtrace: describe structure of common fast path, alude to
     similar technique in our fasttrack race detector.
+  - Clean Calls with Arguments: argument materialization
   - Decoding the routine in the presence of control flow
   - Handling Fastpath: describe detection of and isolation of fastpath
   - Handling Slowpath: describe expansion of slowpath
   - Handling Side Effects: describe how side effects are deferred in memtrace
     example
-  - Argument materialization
-  - Argument folding (immediates, leas(?))
-  - Alternative: Predicate Function: discuss Pin's approach of InsertIfCall +
-    InsertThenCall, inline IfCall if possible.  Requires client code
-    restructuring, but doesn't suffer from above issues.
+  - Constant Folding (immediate arguments)
+  - Complex lea Folding
 
 - Performance
   - inscount
   - alignment
   - memtrace
+  - comparison with Pin?
+
+- Future or related work?
+  - Alternative: Predicate Function: discuss Pin's approach of InsertIfCall +
+    InsertThenCall, inline IfCall if possible.  Requires client code
+    restructuring, but doesn't suffer from above issues.
+
 
 - Contributions
   - Inlining

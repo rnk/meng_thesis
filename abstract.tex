@@ -34,14 +34,14 @@ between doing work which can be inlined and work that cannot.
 \item Coalescing inlined calls to prevent unnecessary register saves or stack
 switches.
 %\item Transforming instructions to avoid usage of the x86 flags register.
-\item Using fewer registers to eliminate extra saves and restores.
+%\item Using fewer registers to eliminate extra saves and restores.
 \item Classic optimizations such as dead store elimination and redundant load
 elimination.
 \end{itemize}
 
 With this additional functionality built on DynamoRIO, we have shown
-improvements of up to 54.8x for a na\"ive instruction counting tool as well as
-a XXX\% performance improvement for a memory alignment checking tool on the
-bzip2 benchmark from the SPEC 2006 CPU benchmark suite.
+improvements of up to 54.8x for a na\"ive instruction counting tool as well as a
+3.7x performance improvement for a memory alignment checking tool on average for
+many of the benchmarks from the SPEC 2006 CPU benchmark suite.
 
 \end{abstractpage}
