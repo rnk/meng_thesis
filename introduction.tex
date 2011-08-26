@@ -44,16 +44,18 @@ The goal of this thesis is to improve on Pin's inlining techniques and make it
 possible to build performant program anlysis tools with DynamoRIO without
 burdening the tool writer.  Throughout this thesis, we follow the efforts of a
 tool author attempting to implement three tools: an instruction counting tool, a
-memory alignment tool, and a memory access trace tool.  To support the tool
-author, this thesis provides the following contributions:
+memory alignment tool, and a memory access trace tool.  To support the author
+of these tools, we make the following contributions:
 
-\begin{packed_enumerate}
-\item An optimization to inline instrumentation routines written in plain C or
-C++ into the application code stream.
-\item An optimization to ``partially inline'' instrumentation routine fastpaths.
-\item A suite of general optimizations operating on x86 machine code leveraging
-the optimization opportunities created by inlining.
-\end{packed_enumerate}
+\begin{packed_itemize}
+\item The first {\em partial inlining} optimization for instrumentation
+routines with conditional analysis.
+\item The first {\em call coalescing} optimization for instrumentation
+routines.
+\item An {\em inlining} optimization for instrumentation routines.
+\item A suite of x86 machine code optimizations leveraging the opportunities
+created by inlining.
+\end{packed_itemize}
 
 \section{Thesis Overview}
 
@@ -78,6 +80,9 @@ action needs to be taken if the memory access is aligned.  In the memory trace
 tool, the trace buffer does not need to be flushed if it is not full.  We
 describe how we go about inlining the fast paths while maintaining correctness
 when the slowpath is taken.
+
+In Chapter \ref{sec:system} we depart from our example-driven description of
+the system to step back and look at the system hierarchy.
 
 In Chapter \ref{sec:performance} we present the experimental performance results
 we achieved on the SPEC2006 CPU integer benchmarks\cite{spec_cpu_2k6} for all

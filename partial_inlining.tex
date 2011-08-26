@@ -246,6 +246,7 @@ alignment checker.}
 \end{figure}
 
 \section{Inlining Fastpath}
+\label{sec:inlining_fastpath}
 
 Once we have the full routine instruction stream, we scan from the entry point
 to the first control flow instruction.  In the assembly listing of Figure
@@ -288,6 +289,7 @@ This code fragment is much more amenable to inlining, but it is not complete.
 We still need to generate code to handle the slowpath case out of line.
 
 \section{Slowpath Transition}
+\label{sec:slowpath_transition}
 
 At first, it seems reasonable to try to set up the stack and registers exactly
 as it would have been in a clean call after the check had failed.  Then we would
@@ -332,6 +334,7 @@ This means the stack has to be set up in exactly the same way it would have if
 we had executed a clean call.
 
 \section{Deferring Side Effects}
+\label{sec:deferring}
 
 Unfortunately, there is a problem with re-executing the entry block of the
 routine when we call it from the entry point.  If there are any side effects in

@@ -61,6 +61,31 @@ Possible outline:
   - Constant Folding (immediate arguments)
   - Complex lea Folding
 
+- System Overview
+  - Steps and phases
+  - Call-site insertion:
+    - Get or compute callee info from cache, discussed next
+    - Make call-site info struct with args and callee info
+    - Code is expanded later, after whole bb optimization
+  - Callee analysis:
+    - decode
+    - analyze stack usage
+    - analyze for partial inline
+    - optimize, give enumerated list of optimizations
+    - add to cache
+    - Return to call-site analysis
+  - Whole BB Optimization
+    - Schedule calls together, within register liveness constraints
+    - Expand to pseudo-save, inline code, pseudo-restore
+    - Delete reciprocal ops
+    - Expand pseudo-save and pseudo-restore ops
+    - Optimize whole bb again, be careful to only touch meta-instrs
+  - Call-site expansion:
+    - Clone cached ilist
+    - Materialize live args in ilist
+    - Re-optimize with args, especially fold immediates
+    - Analyze register usage, folding eliminates usages
+
 - Performance
   - inscount
   - alignment

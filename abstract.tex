@@ -26,18 +26,15 @@ This thesis presents a suite of optimizations for DynamoRIO that improve the
 performance of ``na\"ive tools,'' or tools which rely primarily on clean calls
 for instrumentation.  The contributions include:
 
-\begin{itemize}
-\item Inlining simple, leaf callbacks into the application code stream.
-\item Partial inlining of callbacks which perform a simple check to decide
-between doing work which can be inlined and work that cannot.
-%\item Lean call insertion, which inserts a call with minimal code footprint.
-\item Coalescing inlined calls to prevent unnecessary register saves or stack
-switches.
-%\item Transforming instructions to avoid usage of the x86 flags register.
-%\item Using fewer registers to eliminate extra saves and restores.
-\item Classic optimizations such as dead store elimination and redundant load
-elimination.
-\end{itemize}
+\begin{packed_itemize}
+\item The first {\em partial inlining} optimization for instrumentation
+routines with conditional analysis.
+\item The first {\em call coalescing} optimization for instrumentation
+routines.
+\item An {\em inlining} optimization for instrumentation routines.
+\item A suite of x86 machine code optimizations leveraging the opportunities
+created by inlining.
+\end{packed_itemize}
 
 With this additional functionality built on DynamoRIO, we have shown
 improvements of up to 54.8x for a na\"ive instruction counting tool as well as a
