@@ -497,7 +497,7 @@ deleting instructions which have purposes besides using the result, such as
 control flow instructions, memory writes, and labels.
 
 An example of an instruction deleted by our dead code elimination pass is in
-Figure \ref{alignment_partial_noop} after the fastpath label with the ``Dead''
+Figure \ref{fig:alignment_partial_noopt} after the fastpath label with the ``Dead''
 comment next to it.
 
 \section{Copy Propagation}
@@ -512,7 +512,7 @@ These copies are often introduced by the compiler when the slowpath needs access
 to a value before it is modified.  Since we delete the slowpath, the original
 value is unused, and the copy is an extra step we do not need.
 
-There is an example of such a copy in Figure \ref{fig:alignment_partial_noop} in
+There is an example of such a copy in Figure \ref{fig:alignment_partial_noopt} in
 the inline code sequence next to the ``Extra copy'' comment.  The result of
 propagating the copy is shown in Figure \ref{fig:copy_propagation}.
 

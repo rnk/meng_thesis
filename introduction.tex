@@ -32,30 +32,66 @@ stream.
 
 On the other hand, DynamoRIO\cite{bruening_phd} has a larger and more general
 interface.  Instead of only inserting calls to plain C or C++ routines, a tool
-has the power to insert custom machine code into the application code.  Being
-able to insert custom machine code is powerful and can support highly efficient
-tools, but it is a daunting task for a researcher or a beginner learning the
-framework.  To help ameliorate the burden, DynamoRIO also has facilities for
-inserting ``clean calls,'' which are similar to Pin's instrumentation routines.
-However, DynamoRIO cannot inline clean calls, and is generally not suited to
-pervasive instrumentation using clean calls.
+has the power to insert custom machine code into the application code.  For
+example, PiPa\cite{pipa} is a cache simulator that inserts custom assembly to
+fill a buffer with application memory access information.  Another thread
+consumes the data to simulate the cache using pipeline parallelism.  DrMemory,
+a memory debugger built with DynamoRIO, generates memory accesses that will
+fault if the application uses uninitialized data.  While faulting is expensive,
+it happens rarely, and in the common case of the access succeeding is faster
+than a normal conditional branch.
 
-The goal of this thesis is to improve on Pin's inlining techniques and make it
-possible to build performant program anlysis tools with DynamoRIO without
-burdening the tool writer.  Throughout this thesis, we follow the efforts of a
-tool author attempting to implement three tools: an instruction counting tool, a
-memory alignment tool, and a memory access trace tool.  To support the author
-of these tools, we make the following contributions:
+Being able to insert custom machine code is powerful and can support highly
+efficient tools, but it is a daunting task for a researcher or a beginner
+learning the framework.  To help ameliorate the burden, DynamoRIO also has
+facilities for inserting ``clean calls,'' which are similar to Pin's
+instrumentation routines.  However, DynamoRIO cannot inline clean calls, and is
+generally not suited to pervasive instrumentation using clean calls.
+
+The goal of this thesis is to make it possible to build performant program
+anlysis tools with DynamoRIO without burdening the tool writer.  Throughout
+this thesis, we follow the efforts of a tool author attempting to implement
+three tools: an instruction counting tool, a memory alignment tool, and a
+memory access trace tool.  To support the author of these tools, we make the
+following contributions:
 
 \begin{packed_itemize}
+\item An {\em inlining} optimization for instrumentation routines.
 \item The first {\em partial inlining} optimization for instrumentation
 routines with conditional analysis.
 \item The first {\em call coalescing} optimization for instrumentation
 routines.
-\item An {\em inlining} optimization for instrumentation routines.
 \item A suite of x86 machine code optimizations leveraging the opportunities
 created by inlining.
 \end{packed_itemize}
+
+Partial inlining is a well-understood compiler optimization that attempts to
+inline the commonly executed code without inlining an entire function, which
+would cause code bloat.  In our case, not all tool code is possible to inline
+into the application code stream, so partial inlining can help by making
+inlining possible at all.  As far as we know, this is the first use of this
+technique to dynamic instrumentation tools.
+
+For tools built with pervasive clean calls, the main cost for such a tool is
+usually the context switching between the application and DynamoRIO.  The idea
+behind call coalescing is that we should make multiple calls after one context
+switch so that we need to make fewer context switches over all.
+
+Finally, we found that applying the above techniques was not enough, and that
+we needed to build a larger suite of general machine code optimizations to
+finish cleaning up the inlined code.  For example, in our memory alignment
+tool, the size used for the alignment check is passed as a parameter, and it is
+always the same at each call site.  If we inline without folding this constant
+into the alignment check, we are clobbering extra registers and issuing extra
+instructions.
+
+%{\em To Saman: Would you rather have me delete the thesis overview section
+%below and move the few paragraphs up here giving more detail about partial
+%inlining?  I feel like the overview is redundant with the table of contents.}
+
+Using the above techniques, we have been able to dramatically improve
+performance for an instruction counting tool by 54.8 times and a memory
+alignment tool by almost 4 times.
 
 \section{Thesis Overview}
 

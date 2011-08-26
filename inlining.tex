@@ -41,13 +41,14 @@ this case a reasonable tool author would be able to optimize this to a single
 instrumentation routine call in each basic block.  However, we believe that for
 more complicated tools, this is not easy, and inserting many calls to
 instrumentation routines around the instructions they pertain to is the simple
-and expected way to write the tool.  For example, for a tool like {\tt
-opcodemix}, which reports the distribution of x86 instruction opcodes executed,
-the simple way to implement this tool is to insert a call before each
-instruction which takes as a parameter the opcode for which a counter should be
-incremented.  We expect that all optimizations applying to our sample
-instruction count tool would be just as effective for {\tt opcodemix} as well as
-other similar tools.
+and expected way to write the tool.  For example, a tool like {\tt opcodemix},
+a sample Pin tool that reports the distribution of x86 instruction opcodes
+executed, is implemented the same way.  The simple way to implement {\tt
+opcodemix} is to instrument each instruction with a call to a function that
+takes the instruction opcode as a parameter.  The routine then increments the
+appropriate counter based on the opcode.  We expect that all optimizations
+applying to our sample instruction count tool would be just as effective for
+{\tt opcodemix} as well as other similar tools.
 
 \section{Clean Calls}
 \label{sec:clean_calls}
