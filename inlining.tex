@@ -115,8 +115,8 @@ conservatively save this set of registers, even though they are most likely
 unused.
 
 For the SPEC bzip2 benchmark, we get terrible performance.  Natively, this
-application runs in 4.5 seconds.  With clean calls, the application takes
-almost nine minutes, giving almost a 120x slowdown.  Through the rest of the
+application runs in 4.5 seconds.  With clean calls, the application takes 9
+minutes and 20 seconds, giving a 124x slowdown.  Through the rest of the
 chapter we show how to improve on that.
 
 Our primary target is to avoid doing all this extra work of context switching.
@@ -221,26 +221,23 @@ further optimization.}
 \end{figure}
 
 The inlined version of the code is clearly an improvement over the clean call
-version of the code, and is 9.5x faster than the clean call version, running in
-56 seconds.  Still the cost of switching contexts to the DynamoRIO stack to
-save registers dwarfs the cost of the actual code we wish to execute.  The most
-straightforward way to avoid this cost is to combine multiple calls, to avoid
-the extra context switching overhead.  By grouping inlined calls together, we
-only have one context switch pair for each basic block instead of one for each
-instruction.
+version of the code, and is 5.8x faster than the clean call version, running in
+96.3 seconds.  Still the cost of switching contexts to the DynamoRIO stack to
+save registers dwarfs the cost of the actual code we wish to execute.  While
+there are opportunities for reducing the work done here, we introduce the novel
+technique of ``call coalescing'' to reduce the number of switches needed.
 
 \section{Call Coalescing}
 
 In order to do coalescing, we need visibility of the entire instrumented basic
 block.  Therefore we choose to represent calls to instrumentation routines as
-artifical pseudo-instructions that are expanded after instrumentation.
-
-Before expanding each call, we see if it is possible to group them together
-within the basic block.  If the call has register arguments, we avoid moving it
-outside the live range of its register arguments or past any memory writes.
-This approach works well for instruction count and other tools that pass
-immediate values to instrumentation routines, because we have total freedom as
-to how they are scheduled.
+artifical pseudo-instructions that are expanded after instrumentation.  Before
+expanding each call, we see if it is possible to group them together within the
+basic block.  If the call has register arguments, we avoid moving it outside
+the live range of its register arguments or past any memory writes.  This
+approach works well for instruction count and other tools that pass immediate
+values to instrumentation routines, because we have total freedom as to how
+they are scheduled.
 
 Once the calls are scheduled, we expand them to another level of pseudo-ops of
 stack switches and register saves and register restores.  Before lowering these
@@ -281,11 +278,11 @@ mov    %gs:0x00 -> %rsp                         # Restore appstack
 \label{fig:inscount_coalesced}
 \end{figure}
 
-By coalescing calls together we are only able achieve a 20\% improvement over
-standard inlining, bringint our execution time down to 45.6 seconds.  However,
-we still spend an entire four instructions setting up a stack frame just so
-that we can save {\tt \%rax} and the flags register.  We describe how we can
-avoid switching stacks altogether in the next section.
+By coalescing calls together we achieve a 2.1x improvement over standard
+inlining, bringing our execution time down to 45.6 seconds.  However, we still
+spend an entire four instructions setting up a stack frame just so that we can
+save {\tt \%rax} and the flags register.  In the next section, we describe how
+we can avoid switching stacks altogether.
 
 \section{Avoiding Stack Switching with TLS}
 \label{sec:tls_scratch}
@@ -351,9 +348,9 @@ instead of dstack.}
 
 Using TLS space on this example only gains us about a 1\% performance
 improvement.  When we initially implemented this optimization, we obtained much
-better results, because we actually implemented TLS usage before call
-coalescing.  After coalescing, there are fewer stack switches to worry about,
-so we are only able to delete 3 frame setup instructions.
+better results, because we implemented TLS usage before call coalescing.  After
+coalescing, there are fewer stack switches to worry about, so we are only able
+to delete 3 frame setup instructions.
 
 To address the next source of inefficiency in our instruction counting tool, we
 use some classic compiler optimizations on the inlined code itself to try to
@@ -427,13 +424,13 @@ mov    %gs:0x00000088 -> %rax                   # Restore %rax
 \label{fig:inscount_rle_dse}
 \end{figure}
 
-After applying both optimizations, we get a satisfactory 3.1 speedup, bringing
-the bzip2 execution time much closer to the native execution time at 14.6
-seconds.  Still, however, our code is not satisfactory.  We are using the {\tt
-add} instruction, which updates the carry, overflow, and other bits in the x86
-flags register.  We cannot assume that the application is not using these flag
-bits, so we must preserve them, requiring an extra stack slot.  The next
-section describes how to avoid this.
+After applying both optimizations, we get a satisfactory 2.1 speedup, bringing
+the bzip2 execution time much closer to the native execution time at 21.1
+seconds.  Still, our code is not satisfactory.  We are using the {\tt add}
+instruction, which updates the carry, overflow, and other bits in the x86 flags
+register.  We cannot assume that the application is not using these flag bits,
+so we must preserve them, requiring an extra stack slot and some extra flag
+manipulation instructions.  The next section describes how to avoid this.
 
 \section{Flags Avoidance}
 
@@ -484,23 +481,24 @@ mov    %gs:0x00000088 -> %rax
 \label{fig:inscount_flags}
 \end{figure}
 
-Still, however, it is obvious to a human that this is not as efficient as it
-could be.  We do not need three separate increment instructions.  They can be
-folded together to a single {\tt lea} that adds 3 to {\tt \%rax}.
+After applying our flags avoidance optimization, we obtain a 1.4x speedup over
+our previous time.  Still, it is obvious to a human that this is not as
+efficient as it could be.  We do not need three separate increment instructions.
+They can be folded together to a single {\tt lea} that adds 3 to {\tt \%rax}.
 
 \section{Folding {\tt lea} Instructions}
 \label{sec:fold_lea}
 
 Using some of the same register liveness analysis tools we developed to support
-our RLE and DSE optimizations, we can do the same for {\tt lea} operations.  If
-one {\tt lea} defines a register used in another {\tt lea}, we can attempt to
-combine the two memory operands.  For simple base and displacement memory
-operands, as in the listing shown in the previous section, this is as simple as
-adding the two displacements together and substituting in the original base
-register.  We are also able to handle more complex cases involving two memory
-operands both of which have a base, displacement, index, and scale.  After we
-apply our instruction folding optimizations to the example at hand, we get the
-assembly listing in Figure \ref{fig:inscount_lea}.
+our RLE and DSE optimizations, we can do the same register rewriting for {\tt
+lea} operations.  If one {\tt lea} defines a register used in another {\tt lea},
+we can attempt to combine the two memory operands.  For simple base and
+displacement memory operands, as in the listing shown in the previous section,
+this is as simple as adding the two displacements together and substituting in
+the original base register.  We are also able to handle more complex cases
+involving two memory operands both of which have a base, displacement, index,
+and scale.  After we apply our instruction folding optimizations to the example
+at hand, we get the assembly listing in Figure \ref{fig:inscount_lea}.
 
 \begin{figure}
 \begin{verbatim}
@@ -514,6 +512,13 @@ mov    %gs:0x00000088 -> %rax                   # Restore %rax
 \caption{Three inlined calls to {\tt inc\_count} after avoiding aflags usage.}
 \label{fig:inscount_lea}
 \end{figure}
+
+Applying our {\tt lea} folding optimization gives us a 1.5x speedup over our
+previous best, bringing our execution time down to 9.8 seconds.  The
+application's native execution speed is 4.5 seconds on our hardware, and the
+unoptimized instrumented execution time was 9 minutes and 20 seconds.  After
+applying all of our optimizations we are able to improve the instrumented
+execution time 57 fold, obtaining only a 2.1x slowdown from native execution.
 
 \section{Chapter Summary}
 
