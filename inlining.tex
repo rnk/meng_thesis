@@ -114,8 +114,14 @@ which will clobber the caller-saved XMM registers.  Therefore DynamoRIO must
 conservatively save this set of registers, even though they are most likely
 unused.
 
-To avoid doing all this extra work of context switching, we want find a way to
-{\em inline} the instrumentation routine into the application code stream.
+For the SPEC bzip2 benchmark, we get terrible performance.  Natively, this
+application runs in 4.5 seconds.  With clean calls, the application takes
+almost nine minutes, giving almost a 120x slowdown.  Through the rest of the
+chapter we show how to improve on that.
+
+Our primary target is to avoid doing all this extra work of context switching.
+Our first technique is to {\em inline} the instrumentation routine into the
+application code stream.
 
 \section{Simple Inlining}
 \label{sec:simple_inlining}
@@ -215,12 +221,13 @@ further optimization.}
 \end{figure}
 
 The inlined version of the code is clearly an improvement over the clean call
-version of the code, but it also has much room for improvement.  Still the cost
-of switching contexts to the DynamoRIO stack to save registers dwarfs the cost
-of the actual code we wish to execute.  The most straightforward way to avoid
-this cost is to coalesce multiple calls together.  By grouping inlined calls
-together, we only have one context switch pair for each basic block instead of
-one for each instruction.
+version of the code, and is 9.5x faster than the clean call version, running in
+56 seconds.  Still the cost of switching contexts to the DynamoRIO stack to
+save registers dwarfs the cost of the actual code we wish to execute.  The most
+straightforward way to avoid this cost is to combine multiple calls, to avoid
+the extra context switching overhead.  By grouping inlined calls together, we
+only have one context switch pair for each basic block instead of one for each
+instruction.
 
 \section{Call Coalescing}
 
@@ -237,11 +244,12 @@ to how they are scheduled.
 
 Once the calls are scheduled, we expand them to another level of pseudo-ops of
 stack switches and register saves and register restores.  Before lowering these
-pseudo-ops, we pass over the instruction stream to delete consecutive reciprocal
-operations.  Currently we identify three pairs of operations as being
-reciprocal: switching to dstack and back, restoring and saving a register, and
-restoring and saving flags.  Coalescing all calls in a three instruction basic
-block results in the code in Figure \ref{fig:inscount_coalesced}.
+pseudo-ops, we pass over the instruction stream to delete consecutive
+reciprocal operations.  Currently we identify three pairs of operations as
+being reciprocal: switching to dstack and back, restoring and saving a
+register, and restoring and saving flags.  Coalescing all calls in a three
+instruction basic block results in the code in Figure
+\ref{fig:inscount_coalesced}.
 
 \begin{figure}
 \begin{verbatim}
@@ -273,9 +281,11 @@ mov    %gs:0x00 -> %rsp                         # Restore appstack
 \label{fig:inscount_coalesced}
 \end{figure}
 
-However, we still spend an entire four instructions setting up a stack frame
-just so that we can save {\tt \%rax} and the flags register.  We describe how we
-can avoid switching stacks altogether in the next section.
+By coalescing calls together we are only able achieve a 20\% improvement over
+standard inlining, bringint our execution time down to 45.6 seconds.  However,
+we still spend an entire four instructions setting up a stack frame just so
+that we can save {\tt \%rax} and the flags register.  We describe how we can
+avoid switching stacks altogether in the next section.
 
 \section{Avoiding Stack Switching with TLS}
 \label{sec:tls_scratch}
@@ -338,6 +348,12 @@ mov    %gs:0x00000088 -> %rax                   # Restore %rax
 instead of dstack.}
 \label{fig:inscount_tls}
 \end{figure}
+
+Using TLS space on this example only gains us about a 1\% performance
+improvement.  When we initially implemented this optimization, we obtained much
+better results, because we actually implemented TLS usage before call
+coalescing.  After coalescing, there are fewer stack switches to worry about,
+so we are only able to delete 3 frame setup instructions.
 
 To address the next source of inefficiency in our instruction counting tool, we
 use some classic compiler optimizations on the inlined code itself to try to
@@ -411,11 +427,13 @@ mov    %gs:0x00000088 -> %rax                   # Restore %rax
 \label{fig:inscount_rle_dse}
 \end{figure}
 
-Still, however, our code is not satisfactory.  We are using the {\tt add}
-instruction, which updates the carry, overflow, and other bits in the x86 flags
-register.  We cannot assume that the application is not using these flag bits,
-so we must preserve them, requiring an extra stack slot.  The next section
-describes how to avoid this.
+After applying both optimizations, we get a satisfactory 3.1 speedup, bringing
+the bzip2 execution time much closer to the native execution time at 14.6
+seconds.  Still, however, our code is not satisfactory.  We are using the {\tt
+add} instruction, which updates the carry, overflow, and other bits in the x86
+flags register.  We cannot assume that the application is not using these flag
+bits, so we must preserve them, requiring an extra stack slot.  The next
+section describes how to avoid this.
 
 \section{Flags Avoidance}
 
