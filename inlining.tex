@@ -147,6 +147,8 @@ successful, we only inline if the following criteria apply:
 conservative, meaning it must not have any calls, trapping instructions,
 indirect branches, or direct branches outside of the function.
 \item The simplified callee instruction stream is no more than 20 instructions.
+We limit the size of the code we inline to avoid code bloat and excess memory
+usage.
 \item The callee does not use XMM registers.
 \item The callee does not use more than a fixed number of general purpose
 registers.  We have not picked an appropriate limit yet.
@@ -356,7 +358,7 @@ To address the next source of inefficiency in our instruction counting tool, we
 use some classic compiler optimizations on the inlined code itself to try to
 reduce that, now that it is the bottleneck.
 
-\section{RLE and DSE}
+\section{Redundant Load Elimination and Dead Store Elimination}
 
 Redundant load elimination (RLE) and dead store elimination (DSE) are classic
 compiler optimizations that we found useful for optimizing tools.  In our last

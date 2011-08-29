@@ -14,13 +14,12 @@ to the size of the access and diagnoses accesses that are unaligned by reporting
 information about the access.  For the alignment checker, it is fair to assume
 that for most programs most memory accesses are unaligned, unless there is an
 alignment issue in the program.  In the case where the access is aligned, the
-analysis routine almost no work, other than to update a counter of the total
-number of memory accesses.  This represents the fast path through the routine.
-If an access is unaligned, the tool needs to make other function calls to either
-record the access data in memory or write the information out to a file.  This
-represents the slow path.  If many accesses are unaligned, the tool will be slow
-anyway because it must do work to diagnose every unaligned access.  The source
-code for the alignment instrumentation routine is shown in Figure
+analysis routine does no work.  This represents the fast path through the
+routine.  If an access is unaligned, the tool needs to make other function calls
+to either record the access data in memory or write the information out to a
+file.  This represents the slow path.  If many accesses are unaligned, the tool
+will be slow anyway because it must do work to diagnose every unaligned access.
+The source code for the alignment instrumentation routine is shown in Figure
 \ref{fig:alignment_src}.
 
 The memory trace tool has a similar property.  The goal of the {\tt memtrace}
@@ -88,7 +87,7 @@ defined by synchronization events.  Using shadow memory provided by
 Umbra\cite{umbra}, the initial version of this tool checked if the memory in
 question had been accessed during the last epoch.  If so, it has already been
 checked for races.  It turned out that for most applications memory was reused
-about 50\% of the time, creating the fastpath/slowpath structure that we believe
+about 50\% of the time, creating the fast path/slow path structure that we believe
 is common.
 
 Next we look at what happens when we instrument an application with clean calls.
@@ -203,7 +202,8 @@ Our decoding algorithm simply remembers the furthest forward branch target, and
 decodes up until at least that address.  Once we have passed that address, we
 continue decoding until we reach a {\tt ret}, a backwards branch, or a probable
 tail call.  Our heuristic for identifying tail calls is to check if the target
-address is not between the entry address and the entry plus 4096.
+address is not between the entry address and the entry plus 4096, because it is
+unlikely that an instrumentation routine will be larger than 4096 bytes.
 
 After decoding, we rewrite all the branches to use labels inserted in the
 instruction list instead of raw PC values.  This allows us to follow a branch to
@@ -245,7 +245,7 @@ alignment checker.}
 \label{fig:alignment_asm}
 \end{figure}
 
-\section{Inlining Fastpath}
+\section{Inlining the Fast Path}
 \label{sec:inlining_fastpath}
 
 Once we have the full routine instruction stream, we scan from the entry point
@@ -254,17 +254,17 @@ to the first control flow instruction.  In the assembly listing of Figure
 bytes.  If it is a conditional branch, as it is in the example, we scan forward
 from both branch targets: the fall-through target and the branch taken target.
 If the first control flow instruction we hit on either path is a {\tt ret}
-instruction, we say that path is a ``fastpath.''  If both paths are fast, we
+instruction, we say that path is a ``fast path.''  If both paths are fast, we
 abort our partial inlining analysis and inline both as normal.  If neither path
 is fast, we also abort partial inlining, and most likely will fail to inline the
 routine at all.
 
 If one path is fast and the other is not, we designate the other path the
-``slowpath.''  We then delete all instructions that do not flow directly from
-the entry to the conditional branch and then to the fastpath.  In place of the
-slowpath, we insert a synthetic call instruction which we will expand later as
+``slow path.''  We then delete all instructions that do not flow directly from
+the entry to the conditional branch and then to the fast path.  In place of the
+slow path, we insert a synthetic call instruction which we will expand later as
 described in Section \ref{sec:slowpath_transition}, and a jump to the {\tt ret}
-instruction on the fastpath.  The result of this transformation on the {\tt
+instruction on the fast path.  The result of this transformation on the {\tt
 check\_access} code is shown in Figure \ref{fig:alignment_fastpath}.
 
 \begin{figure}
@@ -286,31 +286,35 @@ alignment checker.}
 \end{figure}
 
 This code fragment is much more amenable to inlining, but it is not complete.
-We still need to generate code to handle the slowpath case out of line.
+We still need to generate code to handle the slow path case out of line.
 
 \section{Slowpath Transition}
 \label{sec:slowpath_transition}
 
-At first, it seems reasonable to try to set up the stack and registers exactly
-as it would have been in a clean call after the check had failed.  Then we would
-jump to the original PC of the routine's slowpath, performing a side-entry into
-the original routine.  However, our attempt to implement this approach failed,
-so we decided to abandon the inline execution and restart the routine from its
-entry point.
+To enter the slow path, we abandon the inline execution and restart the routine
+from its entry point with fresh arguments.  The alternative we considered was to
+attempt a side entry into the routine at the original slow path target PC, but
+this approach would require carefully recreating the stack frame state to match
+what it would have been if the routine had been executed out of line.  Rather
+than create such an analysis, we chose to simply execute the entry block again.
+Unfortunately, if there are side effects in the entry block, executing them
+twice may break the tool.  For this section, we restrict ourselves to working on
+routines without side effects in the entry block and address this problem later
+in Section \ref{sec:deferring}.
 
-Before we can call the tool routine, we need to set up the stack as though we
-had just finished the clean call entry sequence.  By the time we reach the
-slowpath, the entry block leading up to the check will have already clobbered
-many application registers, so we cannot blindly save all registers.  Instead,
-we save all registers that have not already been saved before the inline code.
-This means emitting extra saves and restores for general purpose registers, the
-flags register, and all of the XMM registers.
+Before we can call the tool routine entry point, we need to set up the stack as
+though we had just finished the clean call entry sequence.  By the time we reach
+the slow path, the entry block leading up to the check will have already
+clobbered many application registers, so we cannot blindly save all registers.
+Instead, we save all registers that have not already been saved before the
+inline code.  This means emitting extra saves and restores for general purpose
+registers, the flags register, and all of the XMM registers.
 
 We do not emit all of the save and restore code inline, because it would pollute
 the instruction cache with many uncommonly executed instructions.  On Linux
 x86\_64, a single clean call expands to at least 75 instructions and 542 bytes.
-Therefore, we emit the slowpath transition code in a code cache maintained on
-the side.  When we reach the slowpath, we jump into this code fragment, and it
+Therefore, we emit the slow path transition code in a code cache maintained on
+the side.  When we reach the slow path, we jump into this code fragment, and it
 handles the rest of the transition before returning.  Because we have already
 switched stacks, this is easily implemented with the {\tt call} and {\tt ret}
 instructions.
@@ -318,18 +322,18 @@ instructions.
 Even though we materialize the arguments to the function before the inlined
 code, it is likely that they will be clobbered in the inlined codepath.  Instead
 of trying to preserve the original values, we rematerialize them in the
-slowpath.  While it is possible to share the code for saving all of the unsaved
+slow path.  While it is possible to share the code for saving all of the unsaved
 application registers, the arguments to the routine are usually different at
 every call site.  Therefore we rematerialize the arguments before we jump into
-the shared slowpath transition code.  It is possible to detect if the original
+the shared slow path transition code.  It is possible to detect if the original
 materialized arguments are still live and do not need to be rematerialized, but
-we have not yet implemented this optimization because the slowpath is unlikely
+we have not yet implemented this optimization because the slow path is unlikely
 to be executed in the first place.
 
 One major consideration in our design is that DynamoRIO has a function called
 {\tt dr\_get\_mcontext} that allows the tool to inspect all application
 registers saved at the base of the stack.  Even if this function is called from
-the slowpath of a partially inlined routine, we want it to behave correctly.
+the slow path of a partially inlined routine, we want it to behave correctly.
 This means the stack has to be set up in exactly the same way it would have if
 we had executed a clean call.
 
@@ -341,7 +345,7 @@ routine when we call it from the entry point.  If there are any side effects in
 the entry block, they will occur twice.  For example, if we wish to count every
 memory access in the entry block, as we might want to do with our alignment
 checker, we would end up counting it twice when we have an unaligned access.  We
-solve this problem by deferring such side effects until after the fastpath
+solve this problem by deferring such side effects until after the fast path
 check.
 
 To identify global side effects, we simply test if the instructions in the entry
@@ -356,12 +360,12 @@ the conditional branch, and goes backwards towards the entry point deferring all
 instructions which can be moved past the branch.  An instruction can be moved
 past the branch if:
 
-\begin{enumerate}
+\begin{packed_enumerate}
 \item Its result is unused by the conditional branch, meaning our analysis
 starting from the branch considers it dead.
 \item It does not use any registers clobbered by the branch or its dependent
 instructions, meaning the instructions which could not be deferred.
-\end{enumerate}
+\end{packed_enumerate}
 
 Figure \ref{fig:memtrace_defer} shows the instruction stream of our memory trace
 tool routine before and after deferring side effects.
@@ -422,7 +426,7 @@ size argument into {\tt \%edx}, which is then copied to {\tt \%r8d}.  {\tt
 propagate the copy, propagate the constant through the decrement, and propagate
 the resulting value into the {\tt test} instruction.  We also have dead code
 clobbering registers, such as the left over copy from {\tt \%rdi} to {\tt \%r10}
-in the fastpath.  Furthermore, the benefits of cleaning up this code is that it
+in the fast path.  Furthermore, the benefits of cleaning up this code is that it
 will use fewer registers, which will save a load and store for ever register
 avoided.  In the next sections, we demonstrate how our optimizations iteratively
 improve the code.
@@ -508,9 +512,9 @@ destination of a copy is live, we can simply replace all uses of the destination
 register over its live range with the source register, so long as the source is
 not clobbered before all uses of the destination register.
 
-These copies are often introduced by the compiler when the slowpath needs access
-to a value before it is modified.  Since we delete the slowpath, the original
-value is unused, and the copy is an extra step we do not need.
+These copies are often introduced by the compiler when the slow path needs
+access to a value before it is modified.  Since we delete the slow path, the
+original value is unused, and the copy is an extra step we do not need.
 
 There is an example of such a copy in Figure \ref{fig:alignment_partial_noopt} in
 the inline code sequence next to the ``Extra copy'' comment.  The result of
@@ -564,7 +568,7 @@ As shown in this chapter, partial inlining can be quite profitable for
 conditional analysis routines such as those present in our alignment checker and
 memory trace examples.  Partial inlining is fairly tricky, and requires special
 attention to decoding in the face of control flow, identifying the fast path,
-transitioning to the slowpath, and avoiding repeated side effects.
+transitioning to the slow path, and avoiding repeated side effects.
 
 However, just these techniques are not enough to make partial inlining truly
 profitable.  As shown in Figure \ref{fig:alignment_partial_noopt}, the inserted
@@ -582,8 +586,8 @@ optimizations, we still have 20 instructions executed on the fast path for every
 memory access in the program.  Clever tools that instrument all memory accesses
 such as DrMemory have many techniques that we should automate as future work.
 
-In the next chapter, we look at the actual performance achieved with these
-optimizations on the SPEC 2006 CPU benchmarks.
+In the Chapter \ref{sec:performance}, we look at the actual performance achieved
+with these optimizations on the SPEC 2006 CPU benchmarks.
 
 \begin{figure}
 \begin{verbatim}

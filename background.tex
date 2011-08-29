@@ -4,7 +4,7 @@
 % Background on design of DynamoRIO, all relevant considerations.
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-\section{DBI Frameworks}
+\section{Dynamic Binary Instrumentation Frameworks}
 
 In order to understand this thesis, it is important to understand what a dynamic
 binary instrumentation (DBI) framework provides to a tool writer.
@@ -14,17 +14,17 @@ executes and provide an abstract representation of the program code that the
 tool can analyze and instrument.  At first, it would seem easier to simply
 disassmble the application in question and insert instrumentation code into it
 statically.  However, for modern applications, this approach simply does not
-work.  First, there are dynamically loaded libraries that the application may
-be linked against.  Some of these are possible to identify, such as {\tt libc}
-or others.  Some, however, may be dynamically loaded via other interfaces such
-as {\tt dlopen} on Linux and {\tt LoadLibrary} on Windows.  These are not
-possible to predict statically, and a static instrumentation tool will not be
-able to observe and instrument these instructions.  Hence, a {\em dynamic}
-binary instrumentation framework is needed to run alongside the application and
+work.  First, there are dynamically loaded libraries that the application may be
+linked against.  Some of these are possible to identify, such as {\tt libc} or
+others.  Some, however, may be dynamically loaded via other interfaces such as
+{\tt dlopen} on Linux and {\tt LoadLibrary} on Windows.  These are not possible
+to predict statically, and a static instrumentation tool will not be able to
+observe and instrument these instructions.  Hence, a {\em dynamic} binary
+instrumentation framework is needed to run alongside the application and
 intercept every instruction that the application would have executed were it to
-run natively.  Using dynamic binary instrumentation framework instead of static
-instrumentation, an analysis tool can observe and manipulate {\em all}
-instructions executed by the application instead of just some.
+run natively.  Using dynamic instrumentation instead of static instrumentation,
+an analysis tool can observe and manipulate {\em all} instructions executed by
+the application instead of just some.
 
 Furthermore, a dynamic framework maintains control even in the face of such
 convoluted techniques as self-modifying code.  As techniques such as embedded
@@ -67,10 +67,19 @@ following section.
 
 \begin{figure}
 \begin{center}
-\includegraphics[width=3in]{flow-highlevel.pdf}
+\includegraphics[width=3in]{tool-flow.pdf}
 \caption{High-level diagram of DynamoRIO executing an application.}
+\label{fig:tool-flow}
 \end{center}
 \end{figure}
+
+In order to dynamically instrument an application, DynamoRIO performs ``process
+virtualization.''  Essentially, it injects itself between the application and
+the operating system, as shown in Figure \ref{fig:tool-flow}.  All control
+transfers between the application and the operating system are caught and
+mediated by DynamoRIO so that it can maintain control.  To run an application
+under DynamoRIO, the application is launched in such a way that DynamoRIO is
+loaded and given control during process initialization.
 
 When DynamoRIO takes control, it sets up its own execution context, separate
 from that of the application.  DynamoRIO's context consists of a separate stack,
@@ -78,51 +87,48 @@ and a thread-local data structure describing its state.  The application context
 consists of the original application stack along with all of the registers that
 DynamoRIO may clobber while executing its own code.  Once DynamoRIO has switched
 to its own stack, it determines what the next application program counter would
-have been and begins the process of interpretation.
+have been and begins the process of interpretation, entering the basic block
+builder from Figure \ref{fig:tool-flow}.
 
-DynamoRIO does not execute the original application instructions.  Instead, it
-interprets the application code one basic block at a time.  For a previously
-unencountered target application PC, it decodes instructions from the first
-instruction until the next control transfer.
-
-At this point, DynamoRIO has a list of machine instructions that should be
-identical to the instructions that would be executed by the application.
-Before modifying the instructions to run in the code cache, DynamoRIO presents
-the instructions to the tool for instrumentation, if there is any.  The tool
+For a previously unencountered target application PC, the builder decodes
+instructions from the first instruction until the next control transfer.  Before
+modifying the instructions to run in the code cache, DynamoRIO presents the
+instructions to the tool for instrumentation, if a tool is loaded.  The tool
 then has the opportunity to analyze the basic block and insert its own
-instructions or clean calls.  Such instructions are marked as being ``meta,''
-meaning they are not application instructions and should not be modified to
-maintain control.  Inserting custom code into the application is the most
-efficient way to perform analysis, but most na\"ive clients will stick to
-inserting clean calls.  Clean calls require a full context switch, and
+instructions or clean calls.  Such instructions are marked as ``meta,'' meaning
+they are not application instructions and should not be modified to maintain
+control.  Inserting custom code into the application is the most efficient way
+to perform analysis, but most na\"ive clients will stick to inserting clean
+calls.  Clean calls require a full context switch across the gray border, and
 significantly bloat code size, requiring extra memory and polluting the cache.
 
 After instrumentation, DynamoRIO mangles the terminating control transfer
 instruction to maintain control when the basic block exits.  Specifically,
-control flow instructions are mangled so that they jump into DynamoRIO's
-central dispatch mechanism which will figure out what to do next.
+control flow instructions are mangled so that they jump into DynamoRIO's central
+dispatch mechanism which will figure out what to do next, which is represented
+by the arrow leaving the code cache and entering the dispatch block in Figure
+\ref{fig:tool-flow}.
 
 Once DynamoRIO is done modifying the application instruction stream, the
-instructions are encoded into a ``fragment'' in the ``code cache.'' The code
-cache is the memory space allocated by DynamoRIO for translated application
-code.  This process is known as ``translation.'' Finally, DynamoRIO switches
-back to the application context and starts executing the new fragment.
+instructions are encoded into a ``fragment'' in the code cache.  The code cache
+is the memory space allocated by DynamoRIO for translated application code.
+Finally, DynamoRIO switches back to the application context and starts executing
+the new fragment.
 
-When the basic block finishes execution, instead of transferring to the
-original application target, it will re-enter the DynamoRIO VM with information
-about the original target application program counter.  If the target
-application PC is not in the code cache yet, DynamoRIO will then repeat the
-process of translation for the next basic block.  After translation, it will
-return to the application context and re-start execution from the freshly
-translated fragment.
+When the basic block finishes execution, instead of transferring to the original
+application target, it will re-enter the DynamoRIO VM with information about the
+original target application program counter.  If the target application PC is
+not in the code cache yet, DynamoRIO will then repeat the process of translation
+for the next basic block.  After translation, it will return to the application
+context and continue execution from the freshly translated fragment.
 
 Bouncing back and forth between DynamoRIO's central dispatch and the code cache
 is expensive, so DynamoRIO attempts to ``link'' basic blocks together.  If the
 control transfer target is direct, the two basic blocks can be linked by
 modifying the terminating control transfer instruction of the previous fragment
 to directly target to the beginning of the next fragment.  As a result, when a
-code path executes more than once, it will not have to leave the application
-context to look up the fragment for the target PC in the DynamoRIO VM.
+code path executes more than once, it will not have to leave the code cache to
+look up the next fragment to execute.
 
 Now that we have presented the motivations and challenges involved with dynamic
 binary instrumentation, we demonstrate how simple inlining and our suite of

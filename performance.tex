@@ -30,11 +30,13 @@ the system compiler, which is Debian GCC 4.3.4.
 \section{Instruction Count}
 
 Figure \ref{fig:inscount_all} shows our performance across benchmarks from the
-suite for instruction count at various levels of optimization.  The optimization
-level refers to how aggressive our inlining optimizations are.  It does {\em not}
-indicate the optimization level with which the tool was compiled.  An
-optimization level of zero means that all calls to instrumentation routines are
-treated as standard clean calls, requiring a full context switch.
+suite for instruction count at various levels of optimization.  In order to see
+the performance at higher optimization levels, we have redrawn the graph in
+Figure \ref{fig:inscount_no0} without the {\tt inscount\_opt0} slowdowns.  The
+optimization level refers to how aggressive our inlining optimizations are.  It
+does {\em not} indicate the optimization level with which the tool was compiled.
+An optimization level of zero means that all calls to instrumentation routines
+are treated as standard clean calls, requiring a full context switch.
 
 \begin{figure}
 \includegraphics[width=6in]{perf_charts/inscount_all.pdf}
