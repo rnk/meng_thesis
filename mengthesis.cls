@@ -356,7 +356,7 @@
    \vfill
    \signature
        {Accepted by}
-       {Arthur C. Smith \\
+       {Dennis M. Freeman \\
         Professor of Electrical Engineering \\
         Chairman, Department Committee on Graduate Theses}
    \vfill

@@ -2,7 +2,8 @@
 \label{sec:system}
 
 After walking through the examples from the previous chapters, we now describe
-the system in its final form.
+the system in its final form, in order to look at how the components fit
+together.
 % TODO DERP
 
 \section{Call Site Insertion}
@@ -24,9 +25,9 @@ to the tool, where it performs further analysis and instrumentation.
 \section{Callee Analysis}
 \label{sec:callee}
 
-For every routine that we wish to call, we need to analyze it to decide if it
-can be inlined or partially inlined.  First, we need to decode the routine.
-In the absence of debug info or any symbols at all, we need to use our own
+For every routine that we wish to call, we need perform analysis to decide if it
+can be inlined or partially inlined.  First, we need to decode the routine.  In
+the absence of debug info or any symbols at all, we need to use our own
 heuristics to try to find the extent of the function.  Our algorithm is to
 decode one instruction at a time and remember the furthest forward branch,
 conditional or unconditional, within the next 4096 bytes of instructions.  If it
@@ -36,32 +37,32 @@ branch, or tail call.
 
 Once we have decoded the routine, we analyze its usage of the stack.  In
 particular, we want to find and remove frame setup code that will not be
-inlined.  In general, we try to match frame setup and teardown instructions
+inlined.  In general, we try to match frame setup and tear-down instructions
 together in order to remove them.  For functions with multiple exit points, we
-need to find a matching teardown instruction on each exit path for each setup
+need to find a matching tear-down instruction on each exit path for each setup
 instruction.  Furthermore, we need to consider high-level instructions, like
 {\tt leave} and {\tt enter}, that implement multiple steps of frame setup or
-teardown.
+tear-down.
 
 \section{Partial Inlining}
 
 Next we consider the routine for partial inlining.  As described in Section
-\ref{sec:inlining_fastpath}, we check if the first control transfer instructino
+\ref{sec:inlining_fastpath}, we check if the first control transfer instruction
 after the entry point is a conditional branch.  If so, we scan forward from both
 the fallthrough instruction and the branch taken target, looking for a {\tt ret}
 instruction.  If one path has a {\tt ret} and the other does not, it becomes the
 fast path and we apply our partial inlining transformation.  First, we delete
-all instructions except those in the entry block and the fastpath block.  Next,
-we insert a synthetic call in the slowpath block that we expand later.  We
+all instructions except those in the entry block and the fast path block.  Next,
+we insert a synthetic call in the slow path block that we expand later.  We
 cannot expand it at the moment, because we are doing call site independent
 analysis and do not have access to the function arguments, which would need to
 be rematerialized.
 
-Because the slowpath will eventually re-enter the routine from the beginning, we
-need to defer all side-effects from the entry block into the fastpath block, as
-described in Section \ref{sec:deferring}.  An instruction has side-effects if it
-has any non-stack memory write.  We are careful not to move any instruction in
-such a way that its input registers are clobbered, and defer non-side effect
+Because the slow path will eventually re-enter the routine from the beginning,
+we need to defer all side-effects from the entry block into the fast path block,
+as described in Section \ref{sec:deferring}.  An instruction has side-effects if
+it has any non-stack memory write.  We are careful not to move any instruction
+in such a way that its input registers are clobbered, and defer non-side effect
 instructions to preserve this property.
 
 \section{Optimization}
@@ -90,9 +91,9 @@ This sequence was tested to work well on the example tools we optimized.
 
 All of these optimizations have been discussed in previous chapters, except for
 removing jumps to following instructions.  This situation occurs in partial
-inlining cases where the fastpath has no instructions, as in the alignment
-example.  The slowpath ends with a jump to the restore code after the fastpath,
-but if the fastpath is empty, the jump is not needed.
+inlining cases where the fast path has no instructions, as in the alignment
+example.  The slow path ends with a jump to the restore code after the fast
+path, but if the fast path is empty, the jump is not needed.
 
 \section{Inlining Criteria}
 
@@ -118,11 +119,12 @@ support register parameters.
 \end{packed_itemize}
 
 If any of these criteria are not satisfied, we throw away our simplified
-instruction list and mark the routine as not inlineable.  The summary of all of
-this analysis is stored in a cache, so on future calls to the same routine we
-will know immediately if the routine can be inlined or not.
+instruction list and mark the routine as not suitable for inlining.  The summary
+of all of this analysis is stored in a cache, so on future calls to the same
+routine we will know immediately if the routine can be inlined or not.
 
 \section{Basic Block Optimization}
+\label{sec:basic_block_opt}
 
 After all of the instrumentation calls have been inserted by the tool, the tool
 is required to call our system one last time before returning the list of
@@ -134,24 +136,24 @@ At this point, all calls in the instruction stream are a single
 pseudo-instruction, so they are easy to move around.  Our current simple
 scheduling heuristic moves calls together, so long as they have only immediate
 integer arguments.  If they read application register or memory values, we do
-not want to move the instrumentation so the values will change.
+not want to move the instrumentation outside of the live range of that register.
 
 Once calls have been scheduled together, we expand them one layer.  First, the
-application state saving operations are inserted, which are represented mostly
-with pseudo-instructions.  Next, the simplified routine code is inserted, which
-is described further in Section \ref{sec:site_expansion}.  Last, the restore
-code is inserted, as pseudo-instructions.
+application state saving operations are inserted, which are represented with
+pseudo-instructions.  Next, the simplified routine code is inserted, which is
+described further in Section \ref{sec:site_expansion}.  Last, the restore code
+is inserted, again represented as pseudo-instructions.
 
-Because the save and restore operations are high-level psuedo-instructions, they
+Because the save and restore operations are high-level pseudo-instructions, they
 are easy to identify and match with other instructions with reciprocal
 operations.  For example, if we switch to the application stack and then back to
 DynamoRIO's stack, those two operations cancel each other out and we can delete
-them both.  Furthermore, if we restore and then save flags, those are reciprocal
-and can be deleted.  Similarly for registers.  When this is done, if the calls
-were scheduled together, there should be one save sequence and one restore
-sequence and many inlined calls in the middle.
+them both.  If we restore and then save flags, those are reciprocal and can be
+deleted.  Similarly, we can avoid restoring and then saving a register.  When
+this is done, if the calls were scheduled together, there should be one save
+sequence followed by multiple inlined calls followed by one restore sequence.
 
-Last, we run one last optimization sequence over the inlined code.  As shown in
+Last, we run one more optimization sequence over the inlined code.  As shown in
 the instruction count example, RLE and DSE were very effective for identifying
 extra loads and stores to the global count value.  Folding {\tt lea}
 instructions is also beneficial in that example.
@@ -159,10 +161,10 @@ instructions is also beneficial in that example.
 \section{Call Site Expansion}
 \label{sec:site_expansion}
 
-As discussed in the last section, each call is expanded after being scheduled.
-At this point, we have the simplified routine code from the shared cache.
-However, we need to materialize arguments, since each call site has different
-arguments.
+As discussed in Section \ref{sec:basic_block_opt}, each call is expanded after
+being scheduled.  At this point, we have the simplified routine code from the
+shared routine analysis cache.  However, we need to materialize arguments, which
+are different at each call site.
 
 Materializing immediate values is trivial, but anything that reads an
 application register value is fairly complicated.  Our rule is that if we saved
@@ -170,14 +172,14 @@ an application register, we should reload it, because we might have clobbered it
 during argument materialization or flags saving.  We have to special case the
 stack pointer, because we save it in a TLS slot.
 
-For memory operand arguments, we have to be extremely careful, because we cannot
-use a single load instruction to rematerialize the register, and we have limited
+For memory operand arguments, we have to be extremely careful.  We cannot use a
+single load instruction to re-materialize the argument, and we have limited
 available registers.  We solve this by realizing that there are at least two
-available registers on most platforms: the destination register itself, and {\tt
+available registers on all platforms: the destination register itself, and {\tt
 \%rax}, which is never used as a parameter register on any platform.  We restore
 the base register into the argument register and the index register into {\tt
-\%rax}, and rewrite the memory operand to use these two registers.  If one or
-either of the original application registers are unclobbered, we leave them
+\%rax}, and rewrite the memory operand to use these two registers.  If either or
+both of the original application registers are unclobbered, we leave them
 untouched.
 
 Oftentimes there are a few immediate values as arguments, which can be folded
@@ -189,5 +191,5 @@ fold that immediate value into the {\tt test} instruction in Figure
 
 Finally, after our optimization step, we perform our register usage analysis to
 emit save and restore code around the code we want to inline.  We save this
-analysis until after argument materialization and optimization in order to save
+analysis until after argument materialization and optimization in order to spill
 as few registers as possible.

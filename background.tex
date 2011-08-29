@@ -74,12 +74,15 @@ following section.
 \end{figure}
 
 In order to dynamically instrument an application, DynamoRIO performs ``process
-virtualization.''  Essentially, it injects itself between the application and
-the operating system, as shown in Figure \ref{fig:tool-flow}.  All control
-transfers between the application and the operating system are caught and
-mediated by DynamoRIO so that it can maintain control.  To run an application
-under DynamoRIO, the application is launched in such a way that DynamoRIO is
-loaded and given control during process initialization.
+virtualization.''  All application code is translated into the software code
+cache, just as is done in VMWare's flagship virtualization
+product.\cite{vmware_comparison}  Essentially, DynamoRIO injects itself between
+the application and the operating system, as shown in Figure
+\ref{fig:tool-flow}, instead of between the operating system and the hardware,
+as VMWare does.  All control transfers between the application and the operating
+system are caught and mediated by DynamoRIO so that it can maintain control.  To
+run an application under DynamoRIO, the application is launched in such a way
+that DynamoRIO is loaded and given control during process initialization.
 
 When DynamoRIO takes control, it sets up its own execution context, separate
 from that of the application.  DynamoRIO's context consists of a separate stack,

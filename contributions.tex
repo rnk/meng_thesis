@@ -1,4 +1,42 @@
-\chapter{Contributions}
+\chapter{Conclusion}
+
+\section{Future Work}
+
+While our techniques achieve great success with our instruction count example,
+our parital inlining example performance falls short of our ambitions.  In order
+to improve this, we need to consider a few things.
+
+First, we should look into register re-allocation.  Pin uses a linear scan
+register allocator to steal scratch registers from the application which it can
+use in the inline code to avoid extra register spills.  If we used this
+approach, we could eliminate most of the cost of a context switch.  Performing
+register reallocation would be a large task requiring integration with the core
+of DynamoRIO in order to accurately handle signal translation.
+
+We should also consider providing general-purpose building blocks for common
+tasks instead of asking tool authors to use plain C.  For example, we are
+currently considering integrating some of the memory access collection routines
+from DrMemory into a DynamoRIO extension.  With this support, tools would be
+able to efficiently instrument all memory accesses without worrying about
+whether their instrumentation meets our inlining criteria.
+
+Another building block we could provide is general purpose buffer filling
+similar to what was done in PiPa.\cite{pipa}  With a general purpose buffering
+facility, tool authors do not need to worry about whether their calls were
+inlined, and can be confident that DynamoRIO has inserted the most efficient
+instrumentation possible.
+
+Another improvement we could make is to allow the tool to expose the check to us
+explicitly.  The idea is to have the tool give us two function pointers for
+conditional analysis: the first returns a truth value indicating whether the
+second should be called, and the second performs analysis when the first returns
+true.  Pin uses this approach.  It requires the tool author to realize that this
+API exists in order to take advantage of it, but it provides more control over
+the inlining process.  We could provide a mechanism for requesting that a
+routine be inlined regardless of criteria and raise an error on failure,
+allowing the tool to know what routines were inlined.
+
+\section{Contributions}
 \label{sec:contributions}
 
 Using the optimizations presented in this thesis, tool authors are able to
@@ -17,10 +55,10 @@ four fold.
 
 Finally, we present a suite of standard compiler optimizations operating on
 instrumented code.  With these optimizations, we are able to ameliorate the
-register pressure created by inlining and avoid unecessary spills.  Without our
+register pressure created by inlining and avoid unnecessary spills.  Without our
 suite of optimizations, we would not be able to successfully inline many of our
 example tools.
 
-Once these tools have been contributed back to DynamoRIO, we hope to see more
-tool authors use DynamoRIO to build quickly novel dynamic analysis tools that
-run fast enough to be widely adopted.
+Once these facilities have been contributed back to DynamoRIO, we hope to see
+more tool authors choose DynamoRIO for its ease of use in building fast dynamic
+instrumentation tools.

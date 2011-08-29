@@ -2,22 +2,22 @@
 \label{sec:performance}
 
 To measure the performance of our instrumentation optimizations, we ran the
-SPEC2006 CPU integer benchmark suite under the instrumentation of various tools.
+SPEC2006 CPU integer benchmark suite under our example instrumentation tools.
 In particular, we focused on an instruction counting tool, a memory alignment
 checker, and a memory trace tool.  Each tool exercises different aspects of our
 optimizations.  Instruction count, for example, is a very simple tool which is
-amenable to inlining.  The alignment tool has a simple check before diagnosing
-an unaligned access, and is amenable to partial inlining.  The memory trace tool
-checks if the buffer is full before inserting, and is also amenable to partial
-inlining.
+amenable to inlining and coalescing.  The alignment tool has a simple check
+before diagnosing an unaligned access, and is amenable to partial inlining.  The
+memory trace tool checks if the buffer is full before inserting, and is also
+amenable to partial inlining.
 
 Due to the large slowdowns we wish to measure in unoptimized tools, we only ran
-the benchmarks on the ``test'' input size instead of the reference input size.
-However, this makes some benchmarks run very quickly, on the order of zero to
-one seconds, so we removed any benchmark that completed in less than two seconds
-natively.  This removed the {\tt xalancbmk}, {\tt libquantum}, {\tt omnetpp},
-and {\tt gcc} benchmarks.  We were unable to run the {\tt perl} benchmark
-natively at all, so we removed it as well.
+the benchmarks on the test input size instead of the reference input size.
+However, this makes some benchmarks run in under one second, so we removed any
+benchmark that completed in less than two seconds natively.  This removed the
+{\tt xalancbmk}, {\tt libquantum}, {\tt omnetpp}, and {\tt gcc} benchmarks.  We
+were unable to run the {\tt perl} benchmark natively at all, so we removed it as
+well.
 
 The measurements were taken on a single machine from a set of machines donated
 by Intel to the MIT Computer Science and AI Lab (CSAIL).  The machine uses a
@@ -32,16 +32,24 @@ the system compiler, which is Debian GCC 4.3.4.
 Figure \ref{fig:inscount_all} shows our performance across benchmarks from the
 suite for instruction count at various levels of optimization.  In order to see
 the performance at higher optimization levels, we have redrawn the graph in
-Figure \ref{fig:inscount_no0} without the {\tt inscount\_opt0} slowdowns.  The
-optimization level refers to how aggressive our inlining optimizations are.  It
-does {\em not} indicate the optimization level with which the tool was compiled.
-An optimization level of zero means that all calls to instrumentation routines
-are treated as standard clean calls, requiring a full context switch.
+Figure \ref{fig:inscount_no0} without the {\tt inscount\_opt0} and {\tt
+inscount\_opt0\_bb} data.  The optimization level refers to how aggressive our
+inlining optimizations are and does {\em not} indicate the optimization level
+with which the tool was compiled.  An optimization level of zero means that all
+calls to instrumentation routines are treated as standard clean calls, requiring
+a full context switch.
 
 \begin{figure}
 \includegraphics[width=6in]{perf_charts/inscount_all.pdf}
 \caption{Instruction count performance at various optimization levels.}
 \label{fig:inscount_all}
+\end{figure}
+
+\begin{figure}
+\includegraphics[width=6in]{perf_charts/inscount_no0.pdf}
+\caption{Instruction count performance of the optimized configurations for
+easier comparison.}
+\label{fig:inscount_no0}
 \end{figure}
 
 The first configuration, {\tt inscount\_opt0}, is a version of instruction count
@@ -65,20 +73,13 @@ is again the same, except instead of switching stacks, thread-local scratch
 space is used, as discussed in Section \ref{sec:tls_scratch}.
 
 The final configuration, {\tt inscount\_manual}, is the same tool written using
-custom assembly instrumentation.  This is what we would expect a smart,
+custom machine code instrumentation.  This is what we would expect a clever,
 performance-conscious tool author to write.  As shown in Figure
 \ref{fig:inscount_no0}, {\tt inscount\_opt3\_tls} is quite comparable to {\tt
-inscount\_manual}, meaning that for this tool, we are nearly reaching the
-performance of custom assembly.  On average, the automatically optimized
-instruction count tool is achieving 2.0 times slowdown from native, while the
-manual instrumentation achieves on average 1.9 times slowdown.
-
-\begin{figure}
-\includegraphics[width=6in]{perf_charts/inscount_no0.pdf}
-\caption{Instruction count performance of the optimized configurations for
-easier comparison.}
-\label{fig:inscount_no0}
-\end{figure}
+inscount\_manual}, meaning that for this tool, we almost reach the performance
+of custom instrumentation.  On average, the automatically optimized instruction
+count tool is achieving 2.0 times slowdown from native, while the manual
+instrumentation achieves on average 1.9 times slowdown.
 
 Finally, we show the speedup that optimization produces over the na\"ive tool in
 Figure \ref{fig:inscount_speedup}.  On average, {\tt inscount\_opt3\_tls} is
