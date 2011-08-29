@@ -1,7 +1,7 @@
 \chapter{Partial Inlining}
 \label{sec:partial_inlining}
 
-In this chapter we describe our partial inlining technique, which helps speed up
+In this chapter we explain our partial inlining technique for speeding up
 analysis routines that have a common fast path and an uncommon slower path.
 Many analysis tools are structured in this exact way.  To demonstrate how
 partial inlining works, we consider two example tools in this chapter: a memory
@@ -80,17 +80,23 @@ buffer_memop(ptr_uint_t ea, ptr_uint_t pc, uint size, bool write)
 \end{figure}
 
 We believe that this pattern of having fast, early checks in analysis routines
-is common.  For example, another researcher in our group has been working on a
-race detector for native applications using the FastTrack
+is common.  For example, an undergraduate researcher in our group has been
+working on a race detector for native applications using the FastTrack
 algorithm\cite{fasttrack}.  In the implementation, there is a notion of epochs
 defined by synchronization events.  Using shadow memory provided by
 Umbra\cite{umbra}, the initial version of this tool checked if the memory in
 question had been accessed during the last epoch.  If so, it has already been
 checked for races.  It turned out that for most applications memory was reused
-about 50\% of the time, creating the fast path/slow path structure that we believe
-is common.
+in the same epoch at least 50\% of the time, creating the fast path/slow path
+structure that we believe is common.  In later versions of the race detector,
+the researcher generated custom instrumentation to implement the check inline
+before jumping to an out of line clean call.  Essentially, the researcher was
+performing manual partial inlining, which is what we are attempting to do
+automatically.
 
-Next we look at what happens when we instrument an application with clean calls.
+Before we dive into partial inlining, we need to cover how ordinary clean call
+instrumentation works with complex argument values, as those are used throughout
+our examples.
 
 \section{Clean Calls with Arguments}
 
@@ -100,14 +106,16 @@ not need to pass arguments to the instrumentation routine.  Our alignment
 checker and memory trace tool do.
 
 Arguments to instrumentation calls in DynamoRIO are specified as x86 instruction
-operands evaluated in the application context.  However, we can only materialize
-arguments after we have saved the register used to hold the argument, or we will
-clobber it.  This creates a chicken and egg problem, because the argument may,
-for example, reference the stack pointer, which is different once we switch to
-DynamoRIO's execution context.  The upshot of this is that there is no safe
-point in the inlined code to simply evaluate the argument operand as it is.
-Instead we have interpret it and materialize it from the saved application
-context.
+operands evaluated in the application context.  We support calling functions
+with as many arguments as can be passed in registers using the native platform
+calling convention.  However, we can only materialize arguments after we have
+saved the register used to hold the argument, or we will clobber it.  This
+creates a chicken and egg problem, because the argument may, for example,
+reference the stack pointer, which is different once we switch to DynamoRIO's
+execution context.  Because we cannot materialize arguments before the stack
+switch or register spills, there is no safe point in the inlined code to simply
+evaluate the argument operand as it is.  Instead we have interpret it and
+materialize it from the saved application context.
 
 For immediate values, there is no complication.  We simply use a {\tt mov}
 instruction to materialize the value in the argument register.
@@ -115,40 +123,41 @@ instruction to materialize the value in the argument register.
 For register operands, if they are not clobbered by the routine, they will not
 have been saved to the stack.  Therefore, the application value is still live,
 so we perform a simple register-to-register copy.  If the value is used in the
-inline code, we will have already saved it, so we load it back from our scratch
-space.
+inline code, we make sure to generate a register spill before argument
+materialization, so we load it back from our scratch space.
 
 Another issue is that as we materialize arguments into registers, we may clobber
 registers that we wish to use in later arguments.  For example, on Linux
 x86\_64, the first argument is materialized into {\tt \%rdi}, but the second
 argument may read {\tt \%rdi}.  Our solution is to only materialize arguments
-that end up being used by the body inline.  By following this rule, we will
-never clobber application registers that have not been saved, and we can
-rematerialize the second argument from our scratch space.
+that end up being used by the body inline.  By following this rule, we can only
+write registers that are saved in the context switch, and we can rematerialize
+the application value of {\tt \%rdi} from our scratch space.
 
 Finally, if the register is {\tt \%rsp}, we have a special case.  The
 application stack pointer is always saved in the TLS scratch space instead of
 the stack, so we must restore it from there, as shown later in Figure
 \ref{fig:arg_mat_lea}.
 
-X86 memory operands complicate matters, because they may use two registers for
-the base and index.  Also, a memory operand may have a size, meaning the
-argument should be the value loaded from that address, or it may be unsized,
-implying that the argument should be the effective address of the memory
-operand.  Depending which is requested, we use a load or a {\tt lea}
-instruction.  Similar to the register operand case, we need to need to
+For memory operands, we support two operations: we can either load the
+application value from the memory addressed by the operand using a {\tt mov}
+instruction, or we can load the effective address of the memory operand with a
+{\tt lea} instruction, giving us a pointer to the application value.
+
+X86 memory operands complicate matters because they may use two registers for
+the base and index.  Similar to the register operand case, we need to need to
 materialize the registers used by the operand before we can materialize the
-argument.  We also cannot use the original registers of the operand, because
-they may now contain materialized arguments.  Therefore, we load the base into
-the destination register for the argument, because we know it will be dead after
-the load or address computation.  We then modify the base register of the memory
-operand to be the destination register.  If the index has been clobbered, then
-we need a second dead register.  We hard code the choice of {\tt \%rax} for
-holding the index register because there are no calling conventions that
-DynamoRIO supports that use {\tt \%rax} as a register parameter, and it is often
-already saved due to being used in the inline code sequence.  If it is not
-already saved, it will be marked for saving later when we re-analyze the code
-sequence with argument materialization.
+argument.  We cannot use the original registers of the operand, because they may
+now contain materialized arguments.  Therefore, we load the base into the
+register we are using to hold the argument.  We know the argument register will
+be dead after the load or address computation, so this is safe.  We then modify
+the base register of the memory operand to be the argument register.  If the
+index has been clobbered, then we need a second dead register.  We hard code the
+choice of {\tt \%rax} for holding the index register because there are no
+calling conventions that DynamoRIO supports that use {\tt \%rax} as a register
+parameter, and it is often already saved because it must be used to save flags.
+If it is not already saved, it will be marked for saving later when we
+re-analyze the code sequence with argument materialization.
 
 For a complete example, if we instrument the load instruction {\tt movq
 0x44(\%rsp, \%rdi, 4) -> \%rax} with an unoptimized clean call, we emit the code
@@ -195,15 +204,16 @@ The na\"ive approach described in Section \ref{sec:simple_inlining} of scanning
 forward from the function entry to the first {\tt ret} instruction breaks down
 quickly if we want to handle control flow.  Partial inlining requires this, so
 our decoding algorithm has to handle control flow past the first {\tt ret}
-instruction.  Even our simple {\tt check\_access} instrumentation routine
-jumps past the first ret, as shown in Figure \ref{fig:alignment_asm}.
+instruction.  Even our simple {\tt check\_access} instrumentation routine jumps
+past the first ret, as shown in Figure \ref{fig:alignment_asm}.
 
 Our decoding algorithm simply remembers the furthest forward branch target, and
 decodes up until at least that address.  Once we have passed that address, we
 continue decoding until we reach a {\tt ret}, a backwards branch, or a probable
 tail call.  Our heuristic for identifying tail calls is to check if the target
-address is not between the entry address and the entry plus 4096, because it is
-unlikely that an instrumentation routine will be larger than 4096 bytes.
+address is not between the entry address and the entry plus 4096.  Our choice of
+cutoff is arbitrary and has not been tuned, but it is unlikely that a single
+instrumentation routine will be larger than 4096 bytes.
 
 After decoding, we rewrite all the branches to use labels inserted in the
 instruction list instead of raw PC values.  This allows us to follow a branch to
@@ -259,10 +269,10 @@ abort our partial inlining analysis and inline both as normal.  If neither path
 is fast, we also abort partial inlining, and most likely will fail to inline the
 routine at all.
 
-If one path is fast and the other is not, we designate the other path the
-``slow path.''  We then delete all instructions that do not flow directly from
-the entry to the conditional branch and then to the fast path.  In place of the
-slow path, we insert a synthetic call instruction which we will expand later as
+If one path is fast and the other is not, we designate the other path the ``slow
+path.''  We then delete all instructions that do not flow directly from the
+entry to the conditional branch and then to the fast path.  In place of the slow
+path, we insert a synthetic call instruction which we will expand later as
 described in Section \ref{sec:slowpath_transition}, and a jump to the {\tt ret}
 instruction on the fast path.  The result of this transformation on the {\tt
 check\_access} code is shown in Figure \ref{fig:alignment_fastpath}.
@@ -306,8 +316,8 @@ Before we can call the tool routine entry point, we need to set up the stack as
 though we had just finished the clean call entry sequence.  By the time we reach
 the slow path, the entry block leading up to the check will have already
 clobbered many application registers, so we cannot blindly save all registers.
-Instead, we save all registers that have not already been saved before the
-inline code.  This means emitting extra saves and restores for general purpose
+Instead, we save all application registers that were not saved before the
+inlined code.  This means emitting extra saves and restores for general purpose
 registers, the flags register, and all of the XMM registers.
 
 We do not emit all of the save and restore code inline, because it would pollute
@@ -320,51 +330,51 @@ switched stacks, this is easily implemented with the {\tt call} and {\tt ret}
 instructions.
 
 Even though we materialize the arguments to the function before the inlined
-code, it is likely that they will be clobbered in the inlined codepath.  Instead
-of trying to preserve the original values, we rematerialize them in the
-slow path.  While it is possible to share the code for saving all of the unsaved
-application registers, the arguments to the routine are usually different at
-every call site.  Therefore we rematerialize the arguments before we jump into
-the shared slow path transition code.  It is possible to detect if the original
-materialized arguments are still live and do not need to be rematerialized, but
-we have not yet implemented this optimization because the slow path is unlikely
-to be executed in the first place.
+code, it is likely that they will be clobbered in the inlined code.  Instead of
+trying to preserve the original values, we rematerialize them in the slow path.
+While it is possible to share the register spilling code, the arguments to the
+routine are usually different at every call site.  Therefore we rematerialize
+the arguments before we jump into the shared slow path transition code.  It is
+possible to detect if the original materialized arguments are still live and do
+not need to be rematerialized, but we have not yet implemented this optimization
+because the slow path is unlikely to be executed in the first place.
 
 One major consideration in our design is that DynamoRIO has a function called
 {\tt dr\_get\_mcontext} that allows the tool to inspect all application
 registers saved at the base of the stack.  Even if this function is called from
 the slow path of a partially inlined routine, we want it to behave correctly.
 This means the stack has to be set up in exactly the same way it would have if
-we had executed a clean call.
+we had executed a clean call, which means spilling all application registers
+into the right stack slots.
 
 \section{Deferring Side Effects}
 \label{sec:deferring}
 
-Unfortunately, there is a problem with re-executing the entry block of the
-routine when we call it from the entry point.  If there are any side effects in
-the entry block, they will occur twice.  For example, if we wish to count every
-memory access in the entry block, as we might want to do with our alignment
-checker, we would end up counting it twice when we have an unaligned access.  We
-solve this problem by deferring such side effects until after the fast path
-check.
+As discussed previously, there is a problem with re-executing the entry block of
+the instrumentation routine.  If there are any side effects in the entry block,
+they will occur twice.  For example, if we wish to count every memory access in
+the entry block, as we might want to do with our alignment checker, we would end
+up counting it twice when we have an unaligned access.  We solve this problem by
+deferring such side effects until after the fast path check.
 
-To identify global side effects, we simply test if the instructions in the entry
-block write to non-stack memory.  We identify a non-stack write as anything
-writing to global variables or to memory addressed through any non-stack pointer
-register.
+To identify instructions with side effects, we test each instruction in the
+entry block to see if it writes to non-stack memory.  A non-stack write is any
+instruction writing to absolute addresses, to PC relative addresses, or to
+addresses relative to any register other than the stack pointer.
 
 Next, we attempt to defer the side effects until after the conditional branch.
-This can be tricky, because the conditional branch may depend on memory reads
-which depend on memory writes that we want to defer.  Our algorithm starts at
-the conditional branch, and goes backwards towards the entry point deferring all
-instructions which can be moved past the branch.  An instruction can be moved
-past the branch if:
+The conditional branch may depend on memory reads which depend on memory writes
+that we want to defer, so we may not be able to defer all side effects, in which
+case we fail to perform partial inlining.  Our algorithm starts at the
+conditional branch and goes backwards towards the entry point while deferring
+all instructions that can be moved safely past the branch.  An instruction can
+be moved past the branch if:
 
 \begin{packed_enumerate}
 \item Its result is unused by the conditional branch, meaning our analysis
 starting from the branch considers it dead.
 \item It does not use any registers clobbered by the branch or its dependent
-instructions, meaning the instructions which could not be deferred.
+instructions, which are the instructions that could not be deferred.
 \end{packed_enumerate}
 
 Figure \ref{fig:memtrace_defer} shows the instruction stream of our memory trace
@@ -373,12 +383,12 @@ tool routine before and after deferring side effects.
 \begin{figure}
 \begin{verbatim}
 BEFORE DEFER:
-mov    <rel> 0x000000007221b7a0 -> %r8d
+mov    <rel> 0x000000007221b7a0 -> %r8d               # Cannot defer
 lea    <rel> 0x000000007221b7c0 -> %r9
-mov    %r8d -> %eax
-add    $0x00000001 %r8d -> %r8d
+mov    %r8d -> %eax                                   # Cannot defer
+add    $0x00000001 %r8d -> %r8d                       # Cannot defer
 lea    (%rax,%rax,2) -> %rax
-cmp    %r8d $0x000003ff
+cmp    %r8d $0x000003ff                               # Cannot defer
 lea    0x00(,%rax,8) -> %r10
 mov    %rdi -> (%r9,%rax,8)                           # Write
 mov    %rsi -> 0x08(%r10,%r9,1)                       # Write
@@ -417,19 +427,19 @@ partial inlining and leave the instruction stream unmodified.
 \section{Optimization Opportunities}
 
 Putting together all of the techniques discussed so far, we are able to
-successfully perform partial inlining, but it is hardly profitable.  Figure
-\ref{fig:alignment_partial_noopt} shows what the assembly would look like if we
-stopped here with our partial inlining techniques.  As shown in the listing,
-there are many opportunities for improvement.  For example, we materialize the
-size argument into {\tt \%edx}, which is then copied to {\tt \%r8d}.  {\tt
-\%r8d} is decremented and used in the {\tt test} instruction.  Ideally, we can
-propagate the copy, propagate the constant through the decrement, and propagate
-the resulting value into the {\tt test} instruction.  We also have dead code
-clobbering registers, such as the left over copy from {\tt \%rdi} to {\tt \%r10}
-in the fast path.  Furthermore, the benefits of cleaning up this code is that it
-will use fewer registers, which will save a load and store for ever register
-avoided.  In the next sections, we demonstrate how our optimizations iteratively
-improve the code.
+successfully perform partial inlining, but there is still work to be done.
+Figure \ref{fig:alignment_partial_noopt} shows what the assembly would look like
+if we stopped here with our partial inlining techniques.  As shown in the
+listing, there are many opportunities for improvement.  For example, we
+materialize the size argument into {\tt \%edx}, which is then copied to {\tt
+\%r8d}.  {\tt \%r8d} is decremented and used in the {\tt test} instruction.
+Ideally, we can propagate the copy, propagate the constant through the
+decrement, and propagate the resulting value into the {\tt test} instruction.
+We also have dead code clobbering registers, such as the left over copy from
+{\tt \%rdi} to {\tt \%r10} in the fast path.  Furthermore, the benefits of
+cleaning up this code is that it will use fewer registers, which will save a
+load and store for ever register avoided.  In the next sections, we demonstrate
+how our optimizations iteratively improve the code.
 
 \begin{figure}
 \begin{verbatim}
@@ -516,8 +526,8 @@ These copies are often introduced by the compiler when the slow path needs
 access to a value before it is modified.  Since we delete the slow path, the
 original value is unused, and the copy is an extra step we do not need.
 
-There is an example of such a copy in Figure \ref{fig:alignment_partial_noopt} in
-the inline code sequence next to the ``Extra copy'' comment.  The result of
+There is an example of such a copy in Figure \ref{fig:alignment_partial_noopt}
+in the inline code sequence next to the ``Extra copy'' comment.  The result of
 propagating the copy is shown in Figure \ref{fig:copy_propagation}.
 
 \begin{figure}
@@ -527,7 +537,7 @@ mov    0x10(%rsp) -> %rax
 lea    0x44(%rdi,%rax,4) -> %rdi
 mov    $0x00000008 -> %edx              # Constant
 lea    0xffffffff(%rdx) -> %eax         # Decrement
-test   %rax %rdi
+test   %rax %rdi                        # Test
 jz     fastpath
 \end{verbatim}
 \caption{Example with copy removed.}
@@ -536,31 +546,36 @@ jz     fastpath
 
 \section{Constant Folding}
 
-Perhaps the most classic and trivial optimization that compilers generally
-perform is constant folding.  We fold constants at the machine code level by
-searching for instructions which materialize immediate values into registers.
-When we find such a materialization, we check if we can rewrite the uses of the
-register to use an immediate instead.  We also have logic for folding an
-immediate into an x86 memory operand displacement.  After propagating the copy
-between the {\tt mov \$0x8} instruction and the {\tt lea} instruction, we can
-turn the {\tt lea 0xffffffff(\%r8), \%edx} into {\tt lea 0x7, \%edx}, which is
-effectively another immediate value materialization.  Our {\tt lea} folding
-optimization described in Section \ref{sec:fold_lea} is able to fold the
-displacement-only {\tt lea} into the {\tt test} instruction.  The result is
-shown in Figure \ref{fig:fold_immediate}.
+Perhaps the most classic optimization that compilers perform is constant
+folding.  We fold constants at the machine code level by searching for
+instructions that materialize immediate values into registers.  When we find
+such a materialization, we check if we can rewrite the uses of the register to
+use an immediate instead.  We also have logic for folding an immediate into an
+x86 memory operand displacement.
+
+In Figure \ref{fig:copy_propagation}, we can combine the {\tt mov \$0x08, \%edx}
+instruction with the {\tt lea 0xffffffff(\%r8), \%edx} instruction into {\tt lea
+0x7, \%edx}, which is effectively another immediate value materialization.  Our
+{\tt lea} folding optimization described in Section \ref{sec:fold_lea} is able
+to fold the displacement-only {\tt lea} into the {\tt test} instruction.  The
+result is shown in Figure \ref{fig:fold_immediate}.
 
 \begin{figure}
 \begin{verbatim}
 mov    %gs:0x00 -> %rdi                 # Argument materialization
 mov    0x10(%rsp) -> %rax
 lea    0x44(%rdi,%rax,4) -> %rdi
-test   %rdi $0x00000007
+test   %rdi $0x00000007                 # Test with an immediate
 jz     fastpath
 \end{verbatim}
 \caption{Check from {\tt check\_access} after constants and {\tt lea}
 instructions have been folded.}
 \label{fig:fold_immediate}
 \end{figure}
+
+Although we have only deleted a few register-to-register arithmetic operations
+in the inline code, we have completely eliminated the use of the {\tt \%edx}
+register and avoided an extra register spill.
 
 \section{Chapter Summary}
 

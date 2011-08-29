@@ -146,9 +146,10 @@ successful, we only inline if the following criteria apply:
 \item The callee is a leaf function.  Our definition of leaf function is
 conservative, meaning it must not have any calls, trapping instructions,
 indirect branches, or direct branches outside of the function.
-\item The simplified callee instruction stream is no more than 20 instructions.
-We limit the size of the code we inline to avoid code bloat and excess memory
-usage.
+\item The simplified callee instruction stream is no longer than 20
+instructions.  This limit is in place to avoid code bloat.  The limit of 20
+instructions has not been experimentally tested and was chosen to match Pin's
+behavior.
 \item The callee does not use XMM registers.
 \item The callee does not use more than a fixed number of general purpose
 registers.  We have not picked an appropriate limit yet.
@@ -303,7 +304,7 @@ Our main use for the stack when inlining code is as temporary scratch space
 where we can save registers that are clobbered.  For single-threaded
 applications we can simply use global variables, but this breaks down quickly if
 we want to share the code cache between threads.  In order to have per-thread
-global variables, we need to use ``thread local storage,'' or TlS.  On Windows
+global variables, we need to use ``thread local storage,'' or TLS.  On Windows
 and Linux the x86 {\tt fs} and {\tt gs} segment registers are used to point to a
 memory region unique for each thread.  On Linux, only one segment is used, so we
 claim the other and use it for our own TLS memory region.  On Windows, however,
@@ -355,16 +356,17 @@ coalescing, there are fewer stack switches to worry about, so we are only able
 to delete 3 frame setup instructions.
 
 To address the next source of inefficiency in our instruction counting tool, we
-use some classic compiler optimizations on the inlined code itself to try to
-reduce that, now that it is the bottleneck.
+use some classic compiler optimizations on the inlined code, now that the
+register spilling has been sufficiently optimized.
 
 \section{Redundant Load Elimination and Dead Store Elimination}
 
 Redundant load elimination (RLE) and dead store elimination (DSE) are classic
 compiler optimizations that we found useful for optimizing tools.  In our last
 example, the inlined code is loading {\tt global\_count}, incrementing it, and
-storing it.  What we would like to see is for it to be loaded once, incremented
-three times in a register, and then stored back to memory.
+storing it three separate times.  Rather than having three separate loads and
+stores, we would like to have one load at the beginning and one store at the
+end.
 
 The logic for our version of RLE is that if there is a store to and a load from
 the same memory operand without any potentially aliasing memory writes between
@@ -374,7 +376,7 @@ location is still live by the time the load occurs, and that it is live for all
 uses of the load's destination register.  If that is the case, then we rewrite
 all uses of the load's destination register over its live range to use the
 store's source register.  Figure \ref{fig:inscount_rle} shows the example code
-fragment after applying just RLE.
+fragment after applying RLE.
 
 \begin{figure}
 \begin{verbatim}
@@ -399,11 +401,11 @@ mov    %gs:0x00000088 -> %rax                   # Restore %rax
 \label{fig:inscount_rle}
 \end{figure}
 
-Dead store elimination is similar, in that if there is a store to memory,
+Dead store elimination (DSE) is similar, in that if there is a store to memory,
 followed by no potentially aliasing reads from memory, followed by a store to
 the same memory location, we can delete the first store.  Because we do not need
 to rewrite any uses of any registers, this is simpler than RLE.  Figure
-\ref{fig:inscount_rle_dse} shows the application of both.
+\ref{fig:inscount_rle_dse} shows the application of both RLE and DSE.
 
 \begin{figure}
 \begin{verbatim}
@@ -426,7 +428,7 @@ mov    %gs:0x00000088 -> %rax                   # Restore %rax
 \label{fig:inscount_rle_dse}
 \end{figure}
 
-After applying both optimizations, we get a satisfactory 2.1 speedup, bringing
+After applying both optimizations, we get a satisfactory 2.1x speedup, bringing
 the bzip2 execution time much closer to the native execution time at 21.1
 seconds.  Still, our code is not satisfactory.  We are using the {\tt add}
 instruction, which updates the carry, overflow, and other bits in the x86 flags
@@ -472,9 +474,9 @@ memory accesses.
 \begin{verbatim}
 mov    %rax -> %gs:0x00000088                   # Save %rax
 mov    <rel> 0x0000000000619780 -> %rax         # Load global_count
-lea    0x01(%rax) -> %rax                       # No flags increment
-lea    0x01(%rax) -> %rax                       # No flags increment
-lea    0x01(%rax) -> %rax                       # No flags increment
+lea    0x01(%rax) -> %rax                       # No flags usage
+lea    0x01(%rax) -> %rax                       # No flags usage
+lea    0x01(%rax) -> %rax                       # No flags usage
 mov    %rax -> <rel> 0x0000000000619780         # Store global_count
 mov    %gs:0x00000088 -> %rax 
 ... three application instructions
